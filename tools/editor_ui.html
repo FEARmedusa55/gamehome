@@ -619,21 +619,21 @@ function renderSection(file, sec, i, total) {
     boldBtn.className = 'tiny';
     boldBtn.textContent = 'B';
     boldBtn.style.fontWeight = '700';
-    boldBtn.title = 'Bold this whole paragraph (per-word bold is not working yet)';
+    boldBtn.title = 'Bold the selected words (click again to unbold)';
     boldBtn.onclick = () => {
       const a = activeBox(); if (!a) return;
-      // KNOWN LIMITATION: bolding a selection targets the wrong span. Until
-      // that is fixed, B applies to the whole paragraph — a broad change you
-      // can see, rather than a silent change to words you did not pick.
-      const parts = partsFromBox(a.box, spanClass);
-      const whole = parts.reduce((n, p) => n + (p.text || '').length, 0);
-      const range = { start: 0, end: whole };
-      let allBold = true, touched = 0;
+      const { parts, range } = covered(a);
+      // A toggle, like any rich text editor: if everything the selection covers
+      // is already bold, this click removes it instead.
+      let at = 0, allBold = true, touched = 0;
       for (const p of parts) {
-        if ((p.text || '').length) {
+        const a2 = Math.max(range.start - at, 0);
+        const b2 = Math.min(range.end - at, (p.text || '').length);
+        if (a2 < b2) {
           touched++;
           if (!/font-weight:\s*(700|bold)/i.test(p.style || '')) allBold = false;
         }
+        at += (p.text || '').length;
       }
       styleBlock(file, sec, a.block, a.box, 'font-weight',
                  (touched && allBold) ? '' : '700', range);
@@ -983,10 +983,12 @@ async function styleBlock(file, sec, blk, box, prop, value, range) {
   const next = styleParts(parts, use.start, use.end, prop, value);
   box.innerHTML = partsToHtml(next);
   // Re-rendering destroys the old nodes and the selection with them. Restore it
-  // over the same words, and ignore the select event that restore causes.
+  // over the same words, ignoring the select event that restore causes.
+  // NOTE: no `active` here — this function is module scope, `active` belongs to
+  // the per-section closure, and touching it threw a ReferenceError that
+  // silently skipped the save.
   suppressRemember = true;
   selectRange(box, use.start, use.end);
-  if (active && active.box === box) active.range = { start: use.start, end: use.end };
   setTimeout(() => { suppressRemember = false; }, 0);
   await saveBlock(file, sec, blk, box,
                   use.end - use.start < whole

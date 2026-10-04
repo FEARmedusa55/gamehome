@@ -146,6 +146,10 @@ def section_info(folder: Path, name: str) -> dict:
                 "id": "", "runs": []}
 
     html = read(path)
+    # Scan the SAME markup set_block writes against. merge_spans collapses
+    # identical neighbouring spans, which renumbers blocks — if the editor is
+    # shown ids from the unmerged file, set_block cannot find them.
+    html = textedit_mod.merge_spans(html)
     open_tag = ""
     at = html.find("<section")
     if at >= 0:
@@ -574,7 +578,11 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
         path = folder / payload["section"]
         html = textedit_mod.merge_spans(read(path))
         want = payload.get("block")
-        target = next((s for s in textedit_mod.blocks(html) if s[2] == want), None)
+        # Compare as strings: the id reaches us from the browser, where it has
+        # been through dataset and JSON, so it may be "17" rather than 17. An
+        # int/str comparison here silently fails to find the block, and the save
+        # is dropped.
+        target = next((s for s in textedit_mod.blocks(html) if str(s[2]) == str(want)), None)
         if target is None:
             return {"ok": False, "error": f"block {want!r} not found"}
         c_start, c_end, _bid, _tag, _open = target
