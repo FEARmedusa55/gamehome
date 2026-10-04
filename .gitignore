@@ -1,0 +1,9 @@
+# Editor/tooling churn — not part of the published site
+_undo/
+_backups/
+_trash/
+_pristine-html/
+_screenshots/
+_discarded-clean-rebuild/
+*.bak
+__pycache__/

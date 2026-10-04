@@ -1,0 +1,795 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Site editor</title>
+<style>
+  :root {
+    --bg:#0f1216; --panel:#171c22; --panel-2:#1f262e; --border:#272e37; --border-2:#38424e;
+    --text:#e4e9f0; --muted:#8d99a6; --accent:#4d8dff; --accent-soft:#16233a;
+    --danger:#e2685a; --ok:#43b581; --warn:#d9a343;
+    --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *,*::before,*::after{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px}
+
+  header{
+    display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--panel);
+    border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10;
+  }
+  header .brand{font-weight:700;letter-spacing:-.01em}
+  header .brand span{color:var(--accent)}
+  header .spacer{flex:1}
+  header .status{color:var(--muted);font-size:12.5px;min-height:16px}
+
+  button{
+    font:inherit;padding:5px 11px;border:1px solid var(--border-2);background:var(--panel);
+    color:var(--text);border-radius:6px;cursor:pointer;
+  }
+  button:hover{background:var(--panel-2)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#08111f}
+  button.primary:hover{filter:brightness(1.12)}
+  button.tiny{padding:2px 7px;font-size:12px;line-height:1.4}
+  button.danger:hover{color:var(--danger);border-color:var(--danger)}
+  button:disabled{opacity:.45;cursor:default}
+
+  .layout{display:grid;grid-template-columns:230px minmax(420px,1fr) minmax(340px,1fr);height:calc(100vh - 49px)}
+  .layout.no-preview{grid-template-columns:230px 1fr}
+
+  /* full screen: preview only, filling the window */
+  body.fs .sitebar{display:none}
+  body.fs .layout{grid-template-columns:1fr;height:100vh}
+  body.fs aside,
+  body.fs main{display:none}
+  body.fs .preview{border-left:0}
+
+  /* the pane itself, once the Fullscreen API has taken over */
+  .preview:fullscreen{border-left:0}
+  .preview:fullscreen .bar{background:var(--panel)}
+
+  /* --- sidebar --- */
+  aside{background:var(--panel);border-right:1px solid var(--border);overflow:auto;padding:12px 0}
+  aside h3{
+    margin:0;padding:6px 16px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--muted);font-weight:700;
+  }
+  aside ul{list-style:none;margin:0 0 10px;padding:0}
+  /* One tree instead of separate Categories and Pages lists: the same page
+     used to appear in both, and the sub-pages had no home at all. */
+  aside .row{display:flex;align-items:center;gap:3px;padding:0 10px 0 6px}
+  aside .row:hover{background:var(--bg)}
+  aside .row a{
+    flex:1;min-width:0;display:block;padding:5px 8px;border-radius:6px;color:var(--text);
+    text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  }
+  aside .row a.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
+  aside .row .grip{
+    flex:none;width:13px;text-align:center;color:var(--muted);cursor:pointer;
+    font-size:9px;-webkit-user-select:none;user-select:none;
+  }
+  aside .row .grip:hover{color:var(--text)}
+  aside .row .tools{display:none;gap:2px;flex:none}
+  aside .row:hover .tools{display:flex}
+  aside .kids{display:none;margin-left:14px;border-left:1px solid var(--border);padding-left:2px}
+  aside li.open>.kids{display:block}
+  aside .row a.nopage{color:var(--muted);font-style:italic;cursor:default}
+  .catrow{display:flex;align-items:center;gap:6px;padding:2px 12px 2px 16px}
+  .catrow .name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
+  .addcat{display:flex;gap:6px;padding:6px 16px 2px}
+  .addcat input{flex:1;min-width:0}
+  input[type=text],textarea{
+    font:inherit;padding:5px 8px;border:1px solid var(--border-2);border-radius:6px;
+    background:#0b0e12;color:var(--text);width:100%;
+  }
+  input[type=text]:focus,textarea:focus{
+    outline:none;border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft);
+  }
+  input::placeholder{color:#5d6774}
+  textarea{resize:vertical;min-height:96px;line-height:1.6;font-size:14px}
+  .run textarea{min-height:96px}
+
+  /* --- editor --- */
+  main{overflow:auto;padding:16px 20px 80px}
+  .pagehead{margin:0 0 4px;font-size:18px;font-weight:700}
+  .pagehead small{display:block;font-weight:400;color:var(--muted);font-size:12.5px;margin-top:2px}
+
+  .sec{
+    background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    margin:14px 0;overflow:hidden;
+  }
+  .sec.dirty{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  .sec header{
+    position:static;background:var(--panel);border-bottom:1px solid var(--border);
+    padding:8px 12px;gap:8px;
+  }
+  .sec .idx{
+    font-family:var(--mono);font-size:11.5px;color:var(--muted);
+    background:var(--bg);padding:2px 6px;border-radius:4px;
+  }
+  .sec .prev{flex:1;color:var(--muted);font-size:12.5px;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .sec .body{padding:12px}
+  .run{margin-bottom:12px}
+  .run:last-child{margin-bottom:0}
+  .runbar{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+  .runmeta{font-size:11px;color:var(--muted);font-family:var(--mono);flex:1}
+  .swatch{
+    width:26px;height:22px;padding:0;border:1px solid var(--border-2);
+    border-radius:5px;background:transparent;cursor:pointer;
+  }
+  .runbar button.on{background:var(--accent);border-color:var(--accent);color:#08111f}
+
+  /* add-element menu */
+  .elmenu{
+    position:absolute;top:100%;left:0;margin-top:5px;z-index:30;
+    background:var(--panel);border:1px solid var(--border-2);border-radius:8px;
+    padding:4px;min-width:190px;display:flex;flex-direction:column;gap:2px;
+    box-shadow:0 10px 28px rgba(0,0,0,.5);
+  }
+  /* Without this the class's display:flex beats the UA's [hidden]{display:none},
+     so setting the hidden attribute did nothing and the menu never closed. */
+  .elmenu[hidden]{display:none}
+  .elmenu button{
+    text-align:left;border:0;background:transparent;padding:7px 10px;border-radius:6px;
+  }
+  .elmenu button:hover{background:var(--panel-2)}
+
+  /* images inside a section */
+  .imgbar{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px}
+  .imgcell{
+    display:flex;flex-direction:column;gap:5px;align-items:flex-start;
+    border:1px solid var(--border);border-radius:8px;padding:7px;background:var(--panel-2);
+  }
+  .imgcell img{
+    max-width:190px;max-height:120px;border-radius:5px;display:block;
+    background:#0b0e12;object-fit:contain;
+  }
+  .imgcell .imgsrc{font-size:10px;color:var(--muted);font-family:var(--mono);
+    max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .empty{color:var(--muted);font-style:italic}
+
+  /* --- preview --- */
+  .preview{border-left:1px solid var(--border);background:var(--panel);display:flex;flex-direction:column}
+  .preview .bar{
+    display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);
+    font-size:12.5px;color:var(--muted);
+  }
+  .preview iframe{flex:1;width:100%;border:0;background:var(--bg)}
+
+  .toast{
+    position:fixed;bottom:18px;left:50%;transform:translateX(-50%);
+    background:#05070a;border:1px solid var(--border-2);color:#fff;
+    padding:9px 16px;border-radius:8px;font-size:13px;
+    opacity:0;pointer-events:none;transition:opacity .18s;
+  }
+  .toast.show{opacity:1}
+  .toast.err{background:#2a1210;border-color:var(--danger)}
+</style>
+</head>
+<body>
+
+<header class="sitebar">
+  <div class="brand"><span>&#9632;</span> Site editor</div>
+  <div class="status" id="status"></div>
+  <div class="spacer"></div>
+  <button id="undo">Undo</button>
+  <button id="togglePreview">Hide preview</button>
+  <button id="fullscreen">Full screen</button>
+  <button id="openSite" class="primary">Open site</button>
+</header>
+
+<div class="layout" id="layout">
+  <aside>
+    <h3>Site</h3>
+    <ul id="tree"></ul>
+    <div class="addcat">
+      <input type="text" id="newPage" placeholder="New page name" />
+      <button class="tiny" id="addPage" title="Create a page and add it to the nav">+ page</button>
+    </div>
+    <div class="addcat">
+      <input type="text" id="newGroup" placeholder="New group name" />
+      <button class="tiny" id="addGroup" title="Add a nav heading with no page behind it">+ group</button>
+    </div>
+  </aside>
+
+  <main id="editor">
+    <p class="empty">Pick a page on the left to start editing.</p>
+  </main>
+
+  <section class="preview" id="previewPane">
+    <div class="bar">
+      <span id="previewName">preview</span>
+      <span class="spacer" style="flex:1"></span>
+      <button class="tiny" id="reloadPreview">Reload</button>
+    </div>
+    <iframe id="preview" src="about:blank"></iframe>
+  </section>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let STATE = { pages: [], categories: [] };
+let CURRENT = null;
+
+async function get(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+async function post(payload) {
+  const r = await fetch('/api/action', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error || 'action failed');
+  return j;
+}
+
+function toast(msg, isErr) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show' + (isErr ? ' err' : '');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.className = 'toast'; }, 2600);
+}
+function status(msg) { document.getElementById('status').textContent = msg || ''; }
+
+function reloadPreview() {
+  const f = document.getElementById('preview');
+  f.src = 'about:blank';
+  setTimeout(() => { f.src = CURRENT + '?t=' + Date.now(); }, 40);
+}
+
+// Which groups are open in the sidebar tree. Remembered for the session so a
+// re-render does not collapse everything the user opened.
+const TREE_OPEN = new Set();
+try {
+  (JSON.parse(sessionStorage.getItem('treeOpen') || '[]') || []).forEach(k => TREE_OPEN.add(k));
+} catch (e) {}
+function saveTreeOpen() {
+  try { sessionStorage.setItem('treeOpen', JSON.stringify([...TREE_OPEN])); } catch (e) {}
+}
+
+function tinyBtn(label, title, fn, disabled) {
+  const b = document.createElement('button');
+  b.className = 'tiny';
+  b.textContent = label;
+  b.title = title;
+  if (disabled) b.disabled = true;
+  else b.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); fn(); };
+  return b;
+}
+
+function treeRow(opts) {
+  const row = document.createElement('div');
+  row.className = 'row';
+
+  const grip = document.createElement('span');
+  grip.className = 'grip';
+  if (opts.grip) {
+    grip.textContent = opts.open ? '\u25be' : '\u25b8';
+    grip.title = opts.open ? 'Collapse' : 'Expand';
+    grip.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); opts.onToggle(); };
+  }
+  row.appendChild(grip);
+
+  const a = document.createElement('a');
+  a.href = '#';
+  a.textContent = opts.label;
+  if (opts.file) {
+    a.dataset.file = opts.file;
+    a.onclick = (ev) => { ev.preventDefault(); selectPage(opts.file); };
+  } else {
+    a.className = 'nopage';
+    a.title = 'Group heading \u2014 no page of its own';
+    a.onclick = (ev) => ev.preventDefault();
+  }
+  row.appendChild(a);
+
+  if (opts.tools && opts.tools.length) {
+    const tools = document.createElement('span');
+    tools.className = 'tools';
+    opts.tools.forEach(t => tools.appendChild(t));
+    row.appendChild(tools);
+  }
+  return row;
+}
+
+function removeCategory(row) {
+  const msg = row.nopage
+    ? `Remove the "${row.label}" group heading?`
+    : `Remove the "${row.label}" category?\n\nThe page moves to _trash and the nav link is removed from every page.`;
+  if (!confirm(msg)) return;
+  post({ action: 'remove_category', slug: row.slug.replace(/^\//, '') })
+    .then(() => { toast('Removed ' + row.label); return loadState(); })
+    .catch(e => toast(e.message, true));
+}
+
+function addPageUnder(row) {
+  const name = prompt(`New page under "${row.label}".\n\nIt will be named ${row.label} + your name, and nest under ${row.label}.`);
+  if (!name || !name.trim()) return;
+  const label = name.trim();
+  const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  if (!slug) return;
+  post({ action: 'add_page', slug: slug, label: label, parent: row.slug })
+    .then(r => {
+      toast(`Added ${row.label} + ${label}`);
+      return loadState().then(() => selectPage(r.page));
+    })
+    .catch(e => toast(e.message, true));
+}
+
+function renameCategory(row) {
+  const next = prompt(`Rename "${row.label}" to:`, row.label);
+  if (!next || !next.trim() || next.trim() === row.label) return;
+  post({ action: 'rename_category', slug: row.slug.replace(/^\//, ''), label: next.trim() })
+    .then(() => { toast('Renamed to ' + next.trim()); return loadState(); })
+    .catch(e => toast(e.message, true));
+}
+
+function renderTree() {
+  const tree = document.getElementById('tree');
+  tree.innerHTML = '';
+  const rows = STATE.tree || [];
+
+  rows.forEach((r, i) => {
+    const children = r.children || [];
+    const open = TREE_OPEN.has(r.slug);
+    const li = document.createElement('li');
+    if (children.length && open) li.classList.add('open');
+
+    const tools = [
+      tinyBtn('+', r.nopage ? 'Add a page under ' + r.label
+                            : `Add a page under ${r.label} (named ${r.label} + your name)`,
+              () => addPageUnder(r)),
+      tinyBtn('\u270e', 'Rename this ' + (r.nopage ? 'group' : 'category'),
+              () => renameCategory(r)),
+      tinyBtn('\u2191', 'Move up (also reorders the site nav)',
+              () => movePage(r.href, 'up'), i === 0 || !r.href),
+      tinyBtn('\u2193', 'Move down (also reorders the site nav)',
+              () => movePage(r.href, 'down'), i === rows.length - 1 || !r.href),
+      tinyBtn('\u2212', r.nopage ? 'Remove this group heading' : 'Remove this category',
+              () => removeCategory(r)),
+    ];
+
+    li.appendChild(treeRow({
+      label: r.label,
+      file: r.href || '',
+      grip: children.length > 0,
+      open: open,
+      onToggle: () => {
+        if (TREE_OPEN.has(r.slug)) TREE_OPEN.delete(r.slug);
+        else TREE_OPEN.add(r.slug);
+        saveTreeOpen();
+        renderTree();
+      },
+      tools: tools,
+    }));
+
+    if (children.length) {
+      const kids = document.createElement('ul');
+      kids.className = 'kids';
+      children.forEach(c => {
+        const kli = document.createElement('li');
+        kli.appendChild(treeRow({ label: c.label, file: c.href }));
+        kids.appendChild(kli);
+      });
+      li.appendChild(kids);
+    }
+    tree.appendChild(li);
+  });
+}
+
+async function loadState() {
+  STATE = await get('/api/state');
+  renderTree();
+
+  const undoBtn = document.getElementById('undo');
+  undoBtn.disabled = !STATE.undoDepth;
+  undoBtn.title = STATE.undoDepth
+    ? `${STATE.undoDepth} step${STATE.undoDepth === 1 ? '' : 's'} available`
+    : 'Nothing to undo yet';
+}
+
+async function selectPage(file) {
+  CURRENT = file;
+  document.querySelectorAll('#tree a').forEach(a =>
+    a.classList.toggle('active', a.dataset.file === file));
+  status('loading ' + file + '\u2026');
+  const data = await get('/api/page?file=' + encodeURIComponent(file));
+  renderPage(data);
+  document.getElementById('previewName').textContent = file;
+  reloadPreview();
+  status('');
+}
+
+function renderPage(data) {
+  const ed = document.getElementById('editor');
+  ed.innerHTML = '';
+
+  const h = document.createElement('h2');
+  h.className = 'pagehead';
+  // A sub-page says where it lives, so the heading is never a bare "Sai".
+  const homeGroup = (STATE.tree || []).find(r =>
+    (r.children || []).some(c => c.href === data.file));
+  h.textContent = homeGroup ? `${homeGroup.label} \u00b7 ${data.title}` : data.title;
+  const sub = document.createElement('small');
+  sub.textContent = `${data.sections.length} sections \u00b7 edit text below, then Save`;
+  h.appendChild(sub);
+  ed.appendChild(h);
+
+  const bar = document.createElement('div');
+  bar.style.cssText = 'display:flex;gap:8px;margin:10px 0 2px;position:relative';
+
+  const addBtn = document.createElement('button');
+  addBtn.textContent = '+ Add element \u25be';
+  addBtn.title = 'Insert a new element at the bottom of this page';
+  const menu = document.createElement('div');
+  menu.className = 'elmenu';
+  menu.hidden = true;
+
+  const templates = STATE.templates || [];
+  if (templates.length) {
+    for (const t of templates) {
+      const item = document.createElement('button');
+      item.textContent = t.label;
+      item.onclick = () => { menu.hidden = true; addElement(data.file, t.file, t.label); };
+      menu.appendChild(item);
+    }
+  } else {
+    const item = document.createElement('button');
+    item.textContent = 'no templates \u2014 run make_templates.py';
+    item.disabled = true;
+    menu.appendChild(item);
+  }
+
+  addBtn.onclick = (ev) => { ev.stopPropagation(); menu.hidden = !menu.hidden; };
+  bar.append(addBtn, menu);
+  ed.appendChild(bar);
+
+  data.sections.forEach((sec, i) => ed.appendChild(renderSection(data.file, sec, i, data.sections.length)));
+}
+
+function renderSection(file, sec, i, total) {
+  const card = document.createElement('div');
+  card.className = 'sec';
+
+  const head = document.createElement('header');
+  head.innerHTML = `<span class="idx">${i}</span><span class="prev"></span>`;
+  head.querySelector('.prev').textContent = sec.preview;
+
+  const btnUp = mk('button', '\u2191', 'tiny', () => move(file, sec, 'up'));
+  btnUp.title = 'Move up'; btnUp.disabled = i === 0;
+  const btnDown = mk('button', '\u2193', 'tiny', () => move(file, sec, 'down'));
+  btnDown.title = 'Move down'; btnDown.disabled = i === total - 1;
+  // NOTE: do not name these locals `clone`/`move`/`drop` — a const of the same
+  // name shadows the global function inside the handler below and the click
+  // throws "clone is not a function".
+  const btnDup = mk('button', 'Duplicate', 'tiny', () => dup(file, sec));
+  btnDup.title = 'Copy this section (it inherits this one\'s look)';
+  const btnDel = mk('button', 'Delete', 'tiny danger', () => drop(file, sec));
+
+  head.append(btnUp, btnDown, btnDup, btnDel);
+  card.appendChild(head);
+
+  const body = document.createElement('div');
+  body.className = 'body';
+
+  if (!sec.runs || !sec.runs.length) {
+    body.innerHTML = '<p class="empty">No editable text in this section (it is an image or decoration block).</p>';
+  } else {
+    sec.runs.forEach(run => {
+      const wrap = document.createElement('div');
+      wrap.className = 'run';
+
+      const runbar = document.createElement('div');
+      runbar.className = 'runbar';
+
+      const meta = document.createElement('span');
+      meta.className = 'runmeta';
+      meta.textContent = `text ${run.i}`;
+
+      const swatch = document.createElement('input');
+      swatch.type = 'color';
+      swatch.className = 'swatch';
+      swatch.title = run.color ? `colour ${run.color}` : 'no colour set (inherits)';
+      swatch.value = /^#[0-9a-f]{6}$/i.test(run.color) ? run.color : '#ffffff';
+      const input = document.createElement('textarea');
+      input.value = run.raw;
+      // size to the content, with a floor tall enough to read a paragraph
+      input.rows = Math.min(14, Math.max(4, Math.ceil(run.raw.length / 62)));
+      input.dataset.original = run.raw;
+      input.dataset.i = run.i;
+      input.oninput = () => card.classList.add('dirty');
+
+      // Remember the last selection: clicking a swatch or B blurs the textarea,
+      // and the selection offsets are what partial styling needs.
+      const remember = () => {
+        input.dataset.selStart = input.selectionStart;
+        input.dataset.selEnd = input.selectionEnd;
+      };
+      ['select', 'keyup', 'mouseup', 'blur'].forEach(ev =>
+        input.addEventListener(ev, remember));
+
+      const auto = document.createElement('button');
+      auto.className = 'tiny'; auto.textContent = 'auto';
+      auto.title = 'Clear the colour so the text inherits the page default';
+      auto.onclick = () => styleRun(file, sec, run, input, { color: '' });
+
+      const bold = document.createElement('button');
+      bold.className = 'tiny' + (run.bold ? ' on' : '');
+      bold.textContent = 'B';
+      bold.style.fontWeight = '700';
+      bold.title = 'Bold';
+      bold.onclick = () => styleRun(file, sec, run, input, { bold: !run.bold });
+
+      swatch.onchange = () => styleRun(file, sec, run, input, { color: swatch.value });
+
+      runbar.append(meta, swatch, auto, bold);
+      wrap.appendChild(runbar);
+      wrap.appendChild(input);
+      body.appendChild(wrap);
+    });
+
+    // --- images in this section -------------------------------------------
+    const images = sec.images || [];
+    if (images.length) {
+      const imgbar = document.createElement('div');
+      imgbar.className = 'imgbar';
+      images.forEach(img => {
+        const cell = document.createElement('div');
+        cell.className = 'imgcell';
+
+        const thumb = document.createElement('img');
+        thumb.src = img.src || '';
+        thumb.alt = img.alt || '';
+
+        const src = document.createElement('div');
+        src.className = 'imgsrc';
+        src.textContent = (img.src || '').split('/').pop() || '(no source)';
+        src.title = img.src || '';
+
+        const picker = document.createElement('input');
+        picker.type = 'file';
+        picker.accept = 'image/*';
+        picker.hidden = true;
+        picker.onchange = () => replaceImage(file, sec, img, picker.files[0]);
+
+        const btn = document.createElement('button');
+        btn.className = 'tiny';
+        btn.textContent = 'Replace image';
+        btn.onclick = () => picker.click();
+
+        cell.append(thumb, src, btn, picker);
+        imgbar.appendChild(cell);
+      });
+      body.appendChild(imgbar);
+    }
+
+    const bar = document.createElement('div');
+    bar.style.cssText = 'margin-top:12px;display:flex;gap:8px;align-items:center';
+    const save = mk('button', 'Save section', 'primary', () => saveSection(file, sec, card));
+    const note = document.createElement('span');
+    note.style.cssText = 'color:var(--muted);font-size:12.5px';
+    note.textContent = 'writes text only \u2014 styling untouched';
+    bar.append(save, note);
+    body.appendChild(bar);
+  }
+
+  card.appendChild(body);
+  return card;
+}
+
+function mk(tag, text, cls, onclick) {
+  const b = document.createElement(tag);
+  b.textContent = text;
+  if (cls) b.className = cls;
+  if (onclick) b.onclick = onclick;
+  return b;
+}
+
+async function saveSection(file, sec, card) {
+  const areas = [...card.querySelectorAll('textarea')];
+  const changed = areas.filter(a => a.value !== a.dataset.original);
+  if (!changed.length) { toast('No changes in this section'); return; }
+
+  status('saving\u2026');
+  try {
+    for (const a of areas) {
+      if (a.value === a.dataset.original) continue;
+      await post({ action: 'set_text', file, section: sec.file, index: +a.dataset.i,
+                   text: a.value });
+      a.dataset.original = a.value;
+    }
+    card.classList.remove('dirty');
+    toast('Saved \u2014 page rebuilt');
+    reloadPreview();
+  } catch (e) { toast(e.message, true); }
+  status('');
+}
+
+async function move(file, sec, dir) {
+  try {
+    await post({ action: 'move_section', file, section: sec.file, dir });
+    toast('Moved ' + (dir === 'up' ? 'up' : 'down'));
+    await selectPage(file);
+  } catch (e) { toast(e.message, true); }
+}
+async function drop(file, sec) {
+  if (!confirm('Delete this section from the page?\n\nIt moves to _trash, so it can be recovered.')) return;
+  try {
+    await post({ action: 'drop_section', file, section: sec.file });
+    toast('Section removed');
+    await selectPage(file);
+  } catch (e) { toast(e.message, true); }
+}
+async function dup(file, sec) {
+  // Insert the copy directly after its source, so it lands where you expect.
+  try {
+    await post({ action: 'add_section', file, source: sec.file, after: sec.file });
+    toast('Duplicated \u2014 edit its text, then Save section');
+    await selectPage(file);
+  } catch (e) { toast(e.message, true); }
+}
+async function addElement(file, template, label) {
+  try {
+    await post({ action: 'add_section', file, source: 'blank', template });
+    toast(`Added ${label} at the bottom \u2014 move it with the arrows`);
+    await selectPage(file);
+  } catch (e) { toast(e.message, true); }
+}
+async function styleRun(file, sec, run, input, changes) {
+  try {
+    // If the text was edited but not saved, save it first — otherwise the
+    // selection offsets would refer to text the server doesn't have yet.
+    if (input && input.value !== input.dataset.original) {
+      await post({ action: 'set_text', file, section: sec.file, index: run.i,
+                   text: input.value });
+    }
+    const payload = { action: 'set_style', file, section: sec.file,
+                      index: run.i, ...changes };
+    let partial = false;
+    if (input) {
+      const s = Number(input.dataset.selStart ?? -1);
+      const e = Number(input.dataset.selEnd ?? -1);
+      if (s >= 0 && e > s && e - s < input.value.length) {
+        payload.start = s;
+        payload.end = e;
+        partial = true;
+      }
+    }
+    await post(payload);
+    await selectPage(file);
+    toast(partial ? 'Style applied to the selected text' : 'Style updated');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function replaceImage(file, sec, img, blob) {
+  if (!blob) return;
+  if (!/^image\//.test(blob.type)) {
+    toast('That file is not an image', true);
+    return;
+  }
+  try {
+    const data = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('could not read that file'));
+      reader.readAsDataURL(blob);
+    });
+    const up = await post({ action: 'upload_image', name: blob.name, data });
+    await post({ action: 'set_image', file, section: sec.file,
+                 index: img.i, src: up.src });
+    const size = up.bytes < 1024 ? `${up.bytes} bytes`
+                                 : `${Math.round(up.bytes / 1024)} KB`;
+    await selectPage(file);
+    toast(`Image replaced with ${up.name} (${size})`);
+  } catch (e) { toast(e.message, true); }
+}
+
+// Close any open Add-element menu when clicking elsewhere.
+document.addEventListener('click', () => {
+  document.querySelectorAll('.elmenu').forEach(m => { m.hidden = true; });
+});
+async function movePage(file, dir) {
+  try {
+    await post({ action: 'move_page', file, dir });
+    await loadState();
+    if (CURRENT) await selectPage(CURRENT);
+    toast('Reordered \u2014 nav updated on every page');
+  } catch (e) { toast(e.message, true); }
+}
+
+document.getElementById('undo').onclick = async () => {
+  try {
+    const r = await post({ action: 'undo' });
+    toast('Undid: ' + r.undid);
+    await loadState();
+    if (CURRENT && STATE.pages.some(p => p.file === CURRENT)) await selectPage(CURRENT);
+    else { CURRENT = null; reloadPreview(); }
+  } catch (e) { toast(e.message, true); }
+};
+
+document.getElementById('addPage').onclick = async () => {
+  const input = document.getElementById('newPage');
+  const label = input.value.trim();
+  if (!label) return;
+  const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  try {
+    const r = await post({ action: 'add_page', slug, label });
+    input.value = '';
+    toast('Added page ' + label);
+    await loadState();
+    await selectPage(r.page);
+  } catch (e) { toast(e.message, true); }
+};
+document.getElementById('newPage').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('addPage').click();
+});
+
+document.getElementById('addGroup').onclick = async () => {
+  const input = document.getElementById('newGroup');
+  const label = input.value.trim();
+  if (!label) return;
+  const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  try {
+    await post({ action: 'add_group', slug, label });
+    input.value = '';
+    toast('Added group "' + label + '" \u2014 a nav heading with no page');
+    await loadState();
+  } catch (e) { toast(e.message, true); }
+};
+document.getElementById('newGroup').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('addGroup').click();
+});
+document.getElementById('reloadPreview').onclick = reloadPreview;
+document.getElementById('openSite').onclick = () => window.open('index.html', '_blank');
+document.getElementById('togglePreview').onclick = (e) => {
+  const l = document.getElementById('layout');
+  l.classList.toggle('no-preview');
+  document.getElementById('previewPane').style.display =
+    l.classList.contains('no-preview') ? 'none' : 'flex';
+  e.target.textContent = l.classList.contains('no-preview') ? 'Show preview' : 'Hide preview';
+};
+
+// --- full screen -----------------------------------------------------------
+const previewPane = document.getElementById('previewPane');
+const fsBtn = document.getElementById('fullscreen');
+
+function setFullscreenUI(on) {
+  document.body.classList.toggle('fs', on);
+  if (on) document.getElementById('layout').classList.remove('no-preview');
+  previewPane.style.display = on ? 'flex' : '';
+  fsBtn.textContent = on ? 'Exit full screen' : 'Full screen';
+  if (on) reloadPreview();
+}
+
+fsBtn.onclick = async () => {
+  const goingFull = !document.body.classList.contains('fs');
+  setFullscreenUI(goingFull);
+  try {
+    if (goingFull) await previewPane.requestFullscreen();
+    else if (document.fullscreenElement) await document.exitFullscreen();
+  } catch (err) {
+    // Fullscreen API blocked or unsupported — the layout toggle still applies.
+    toast(goingFull ? 'Full screen layout \u2014 press Esc to exit' : 'Exited full screen');
+  }
+};
+
+// Esc (or F11) leaves the native fullscreen; mirror that back into the layout.
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement && document.body.classList.contains('fs')) {
+    setFullscreenUI(false);
+  }
+});
+
+loadState().catch(e => toast(e.message, true));
+</script>
+</body>
+</html>
