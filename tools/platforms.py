@@ -59,12 +59,16 @@ SITE_CSS_ID = "mm-site-css"
 # permanent sidebar there. Forcing it back on means the bar and title are
 # present at every width.
 #
+# The title itself is then hidden again: the bar is wanted as a plain strip,
+# without the site name in it. (The 250px pad that used to push the title past
+# the permanent sidebar is gone with it — there is nothing left to offset.)
+#
 # Note it does NOT bring back the hamburger: above ~600px Google's script
 # never creates that button at all (it only builds it for the drawer layout),
 # so there is nothing in the DOM to reveal.
 SITE_CSS = """<style id="mm-site-css">
-.VLoccc{display:block !important}
-@media (min-width:1300px){.VLoccc .Pvc6xe{padding-left:250px !important}}
+.VLoccc{display:block !important; top:0 !important}
+.VLoccc a.GAuSPc{display:none !important}
 </style>"""
 
 # Remembering which groups are open needs script: the fold state lives in a
