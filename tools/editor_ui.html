@@ -570,10 +570,17 @@ function renderSection(file, sec, i, total) {
     const sep = () => { const d = document.createElement('div'); d.className = 'tbsep'; return d; };
 
     // What the selection currently covers, in the block's own text.
+    //
+    // The range recorded while the cursor was in the box is used: reading the
+    // live selection at click time is unreliable, because pressing a toolbar
+    // control moves the selection before the handler runs. Colour and size go
+    // through this path and land on the right words; the live read is only a
+    // fallback for a box that was never touched.
     const covered = (a) => {
       const parts = partsFromBox(a.box, spanClass);
       const whole = parts.reduce((n, p) => n + (p.text || '').length, 0);
-      return { parts, whole, range: boxSelection(a.box) || { start: 0, end: whole } };
+      const live = a.range || boxSelection(a.box);
+      return { parts, whole, range: live || { start: 0, end: whole } };
     };
 
     PALETTE.forEach(c => {
@@ -582,7 +589,7 @@ function renderSection(file, sec, i, total) {
       b.style.background = c;
       b.title = `Colour ${c}`;
       b.onclick = () => {
-        const a = activeBox(); if (a) styleBlock(file, sec, a.block, a.box, 'color', c);
+        const a = activeBox(); if (a) styleBlock(file, sec, a.block, a.box, 'color', c, a.range);
       };
       tb.appendChild(b);
     });
@@ -593,7 +600,7 @@ function renderSection(file, sec, i, total) {
     custom.value = '#ffffff';
     custom.title = 'Custom colour';
     custom.onchange = () => {
-      const a = activeBox(); if (a) styleBlock(file, sec, a.block, a.box, 'color', custom.value);
+      const a = activeBox(); if (a) styleBlock(file, sec, a.block, a.box, 'color', custom.value, a.range);
     };
     tb.appendChild(custom);
 
@@ -602,7 +609,7 @@ function renderSection(file, sec, i, total) {
     clearColour.textContent = 'auto';
     clearColour.title = 'Clear the colour so the text inherits the page default';
     clearColour.onclick = () => {
-      const a = activeBox(); if (a) styleBlock(file, sec, a.block, a.box, 'color', '');
+      const a = activeBox(); if (a) styleBlock(file, sec, a.block, a.box, 'color', '', a.range);
     };
     tb.appendChild(clearColour);
 
@@ -612,23 +619,24 @@ function renderSection(file, sec, i, total) {
     boldBtn.className = 'tiny';
     boldBtn.textContent = 'B';
     boldBtn.style.fontWeight = '700';
-    boldBtn.title = 'Bold the selected words (click again to unbold)';
+    boldBtn.title = 'Bold this whole paragraph (per-word bold is not working yet)';
     boldBtn.onclick = () => {
       const a = activeBox(); if (!a) return;
-      const { parts, range } = covered(a);
-      // Already all bold? Then this click is an unbold.
-      let at = 0, allBold = true, touched = 0;
+      // KNOWN LIMITATION: bolding a selection targets the wrong span. Until
+      // that is fixed, B applies to the whole paragraph — a broad change you
+      // can see, rather than a silent change to words you did not pick.
+      const parts = partsFromBox(a.box, spanClass);
+      const whole = parts.reduce((n, p) => n + (p.text || '').length, 0);
+      const range = { start: 0, end: whole };
+      let allBold = true, touched = 0;
       for (const p of parts) {
-        const a2 = Math.max(range.start - at, 0);
-        const b2 = Math.min(range.end - at, (p.text || '').length);
-        if (a2 < b2) {
+        if ((p.text || '').length) {
           touched++;
           if (!/font-weight:\s*(700|bold)/i.test(p.style || '')) allBold = false;
         }
-        at += (p.text || '').length;
       }
       styleBlock(file, sec, a.block, a.box, 'font-weight',
-                 (touched && allBold) ? '' : '700');
+                 (touched && allBold) ? '' : '700', range);
     };
     tb.appendChild(boldBtn);
 
@@ -644,7 +652,7 @@ function renderSection(file, sec, i, total) {
     });
     sizeSel.onchange = () => {
       const a = activeBox(); if (!a) return;
-      styleBlock(file, sec, a.block, a.box, 'font-size', sizeSel.value);
+      styleBlock(file, sec, a.block, a.box, 'font-size', sizeSel.value, a.range);
     };
     tb.appendChild(sizeSel);
 
@@ -654,6 +662,16 @@ function renderSection(file, sec, i, total) {
     tb.appendChild(tbHint);
 
     body.appendChild(tb);
+
+    // Keep the paragraph's focus and selection when a toolbar control is
+    // pressed. Without this the mousedown blurs the box, the selection is lost,
+    // and a colour lands on the whole paragraph instead of the words you picked.
+    // The colour picker and size list need real mouse events, so they are let
+    // through.
+    tb.addEventListener('mousedown', e => {
+      if (e.target.closest('select, input')) return;
+      e.preventDefault();
+    });
 
     // One box per block. sec.blocks groups the runs by the paragraph they sit
     // in, so a paragraph that styling has split into three spans is still one
@@ -688,7 +706,20 @@ function renderSection(file, sec, i, total) {
       box.spellcheck = false;
       box.innerHTML = partsToHtml(parts);
       box.dataset.block = blk.id;
-      box.onfocus = () => { active = { block: blk, box }; };
+      // Remember the selection WHILE the cursor is in the box. Reading it at
+      // click time is unreliable — pressing a toolbar control moves focus, and
+      // the selection can be gone by then, which would style the whole
+      // paragraph instead of the words you picked.
+      box.onfocus = () => { active = { block: blk, box, range: null }; };
+      const rememberSel = () => {
+        // Ignore the select event our own selectRange() triggers: the browser
+        // reports that restored range from the span boundary, which reads one
+        // span to the right and would style the neighbouring words next time.
+        if (suppressRemember) return;
+        const r = boxSelection(box);
+        if (r && active && active.box === box) active.range = r;
+      };
+      ['keyup', 'mouseup', 'select'].forEach(ev => box.addEventListener(ev, rememberSel));
       box.onblur = () => saveBlock(file, sec, blk, box);
       // Enter adds a line inside the paragraph rather than inventing a new
       // block: that keeps one paragraph as one box.
@@ -914,15 +945,51 @@ function boxSelection(box) {
   return { start, end: start + nodeText(r.cloneContents()).length };
 }
 
-async function styleBlock(file, sec, blk, box, prop, value) {
+// Set while the editor restores its own selection, so the resulting select
+// event is not mistaken for the user picking words.
+let suppressRemember = false;
+
+// Put the selection back over [start, end) after the box has been re-rendered,
+// so you can chain colour then bold then size on the same words.
+function selectRange(box, start, end) {
+  const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+  let at = 0, from = null, to = null, n;
+  while ((n = walker.nextNode())) {
+    const len = n.nodeValue.length;
+    if (!from && at + len >= start) from = { node: n, offset: Math.max(start - at, 0) };
+    if (at + len >= end) { to = { node: n, offset: Math.max(end - at, 0) }; break; }
+    at += len;
+  }
+  if (!from || !to) return;
+  try {
+    const r = document.createRange();
+    r.setStart(from.node, from.offset);
+    r.setEnd(to.node, to.offset);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+  } catch (e) { /* box changed shape; leaving it unselected is fine */ }
+}
+
+async function styleBlock(file, sec, blk, box, prop, value, range) {
   const parts = partsFromBox(box, sec.spanClass || 'C9DxTc');
   if (!parts.length) return;
   const whole = parts.reduce((n, p) => n + (p.text || '').length, 0);
-  const range = boxSelection(box) || { start: 0, end: whole };
-  const next = styleParts(parts, range.start, range.end, prop, value);
+  // Callers that worked out the range already pass it in, so the decision they
+  // made and the slice styled here cannot drift apart.
+  // The live selection wins; a caller may pass the range it already worked out,
+  // and the remembered one is the last resort.
+  const use = range || boxSelection(box) || { start: 0, end: whole };
+  const next = styleParts(parts, use.start, use.end, prop, value);
   box.innerHTML = partsToHtml(next);
+  // Re-rendering destroys the old nodes and the selection with them. Restore it
+  // over the same words, and ignore the select event that restore causes.
+  suppressRemember = true;
+  selectRange(box, use.start, use.end);
+  if (active && active.box === box) active.range = { start: use.start, end: use.end };
+  setTimeout(() => { suppressRemember = false; }, 0);
   await saveBlock(file, sec, blk, box,
-                  range.end - range.start < whole
+                  use.end - use.start < whole
                     ? 'Style applied to the selected text'
                     : 'Style updated');
 }

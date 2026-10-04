@@ -24,6 +24,7 @@ Operates on the staged content files so the change survives a rebuild:
 import argparse
 import re
 import sys
+from html import unescape
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent
@@ -47,13 +48,27 @@ SPAN_TOKEN = re.compile(rf"(<span\b[^>]*>)((?:[^<>]|{BR})*)</span>")
 
 
 def to_text(inner: str) -> str:
-    """Markup -> what the editor's box should show: breaks become newlines."""
-    return re.sub(BR, "\n", inner)
+    """Markup -> the plain text the editor should show.
+
+    Entities are decoded and breaks become newlines, so the box shows the words
+    as a reader sees them. escape_text() is the way back.
+    """
+    return unescape(re.sub(BR, "\n", inner))
+
+
+def escape_text(text: str) -> str:
+    """Plain text -> markup-safe text.
+
+    Text typed into the editor arrives decoded, so it must be escaped before it
+    goes back into the page — otherwise an ampersand or a stray angle bracket
+    from the keyboard would corrupt the markup.
+    """
+    return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
 def to_html(text: str) -> str:
-    """Editor box -> markup: newlines become real breaks."""
-    return re.sub(r"\r\n?|\n", "<br>", text)
+    """Editor box -> markup: escapes, then turns newlines into real breaks."""
+    return re.sub(r"\r\n?|\n", "<br>", escape_text(text))
 
 
 # Block-level elements. The editor shows one editing box per block rather than
