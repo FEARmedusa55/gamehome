@@ -34,8 +34,56 @@ SPAN_PAIR = re.compile(
     r"(<span\b[^>]*>)([^<>]*?)</span>(<span\b[^>]*>)([^<>]*?)</span>"
 )
 
-# A single span whose entire content is text (no nested tags).
-SPAN_TOKEN = re.compile(r"(<span\b[^>]*>)([^<>]*)</span>")
+# A soft line break, as Google Sites writes one when text is entered on two
+# lines. The site's own content contains none — but we create them, because a
+# newline typed into the editor has nowhere else to go. HTML collapses a raw
+# "\n" to a space, which is why typing one used to do nothing at all.
+BR = r"<br\b[^>]*>"
+
+# A single span whose entire content is text (no nested tags) apart from soft
+# breaks. Allowing `br` inside matters: without it, adding a line break drops
+# the run out of the editor's reach entirely.
+SPAN_TOKEN = re.compile(rf"(<span\b[^>]*>)((?:[^<>]|{BR})*)</span>")
+
+
+def to_text(inner: str) -> str:
+    """Markup -> what the editor's box should show: breaks become newlines."""
+    return re.sub(BR, "\n", inner)
+
+
+def to_html(text: str) -> str:
+    """Editor box -> markup: newlines become real breaks."""
+    return re.sub(r"\r\n?|\n", "<br>", text)
+
+
+def _markup_offsets(raw: str, start: int, end: int) -> tuple[int, int]:
+    """Map plain-text offsets onto the same positions inside `raw`.
+
+    The editor's selection is measured against the text it displays, which has
+    breaks as newlines; the markup has them as <br>. Splitting on the wrong
+    offsets would slice into the middle of a tag.
+    """
+    out = []
+    plain_at = 0
+    i = 0
+    starts = {start, end}
+    while i <= len(raw):
+        if plain_at in starts and len(out) < 2:
+            out.append(i)
+        if i >= len(raw):
+            break
+        m = re.compile(BR).match(raw, i)
+        if m:
+            if plain_at in starts and len(out) < 2:
+                out.append(i)
+            i = m.end()
+            plain_at += 1        # a break is one character in the text form
+            continue
+        i += 1
+        plain_at += 1
+    while len(out) < 2:
+        out.append(len(raw))
+    return out[0], out[1]
 
 # Properties whose given value is the CSS initial and therefore cannot change
 # how anything renders. Google Sites scatters these in and out of style strings,
@@ -87,8 +135,9 @@ def span_key(open_tag: str) -> tuple:
     match = re.search(r'class="([^"]*)"', open_tag)
     return (match.group(1) if match else "", style_key(open_tag))
 
-# A leaf element whose entire content is text (no child tags).
-LEAF = re.compile(r"<([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>([^<>]*)</\1>")
+# A leaf element whose entire content is text (no child tags) apart from soft
+# breaks — see SPAN_TOKEN above for why `br` is permitted.
+LEAF = re.compile(rf"<([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>((?:[^<>]|{BR})*)</\1>")
 
 
 def read(path: Path) -> str:
@@ -138,7 +187,7 @@ def merge_spans(html: str) -> str:
 
 
 def set_style_props(attrs: str, color: str | None = None,
-                    bold: bool | None = None) -> str:
+                    bold: bool | None = None, size: str | None = None) -> str:
     """
     Add, update or remove inline style properties on a tag's attribute string.
 
@@ -176,6 +225,14 @@ def set_style_props(attrs: str, color: str | None = None,
             drop("color")
     if bold is not None:
         put("font-weight", "700" if bold else "400")
+    # Size works exactly like colour: the site sets it per run as an inline
+    # font-size (body text is 13.999pt), so a size change is just another
+    # declaration in the same style string.
+    if size is not None:
+        if size:
+            put("font-size", size)
+        else:
+            drop("font-size")
 
     style = "; ".join(f"{name}: {value}" for name, value in props)
     if style:

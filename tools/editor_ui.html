@@ -122,6 +122,29 @@
   }
   .runbar button.on{background:var(--accent);border-color:var(--accent);color:#08111f}
 
+  /* One toolbar per section. It styles whichever text box you were last in,
+     applying to your selection when there is one — so colour and bold no
+     longer need a control per run, or a whole new box. */
+  .tb{
+    display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:12px;
+    padding:8px 10px;background:var(--panel-2);
+    border:1px solid var(--border);border-radius:8px;position:sticky;top:0;z-index:5;
+  }
+  .tb .tblabel{font-size:11px;color:var(--muted);font-family:var(--mono);margin-right:2px}
+  .tb .tbhint{font-size:11px;color:var(--muted);margin-left:auto}
+  .tb .tbsep{width:1px;height:20px;background:var(--border-2);margin:0 2px}
+  .tb .pal{
+    width:22px;height:22px;padding:0;border:1px solid var(--border-2);
+    border-radius:5px;cursor:pointer;
+  }
+  .tb .pal:hover{border-color:var(--accent)}
+  .tb button.tiny{min-width:26px}
+  .tb select{
+    background:#0b0e12;color:var(--text);border:1px solid var(--border-2);
+    border-radius:5px;padding:3px 6px;font-size:12px;
+  }
+  .tb .focusnote{font-size:11px;color:var(--warn)}
+
   /* add-element menu */
   .elmenu{
     position:absolute;top:100%;left:0;margin-top:5px;z-index:30;
@@ -505,6 +528,96 @@ function renderSection(file, sec, i, total) {
   if (!sec.runs || !sec.runs.length) {
     body.innerHTML = '<p class="empty">No editable text in this section (it is an image or decoration block).</p>';
   } else {
+    // --- one toolbar for the whole section -------------------------------
+    // Colour, bold and size act on whichever box you were last in, and on the
+    // text you selected inside it — so styling a phrase no longer means
+    // splitting the paragraph, or adding a control per run.
+    const PALETTE = ['#ffffff', '#434343', '#4a86e8', '#bf9000', '#ff0000'];
+    const SIZES = [
+      ['', 'size...'], ['10.6667pt', '10.7'], ['12pt', '12'],
+      ['14pt', '14 (body)'], ['18pt', '18'], ['24pt', '24'],
+      ['32pt', '32'], ['40pt', '40'],
+    ];
+
+    const tb = document.createElement('div');
+    tb.className = 'tb';
+
+    const tbLabel = document.createElement('span');
+    tbLabel.className = 'tblabel';
+    tbLabel.textContent = 'style';
+    tb.appendChild(tbLabel);
+
+    // The toolbar styles the box you were last typing in. Clicking a toolbar
+    // button blurs that box but its remembered offsets survive, which is what
+    // lets a colour land on just the selected words.
+    let active = null;
+    const needBox = () => {
+      if (!active) { toast('Click into a text box first, then style it', true); return null; }
+      return active;
+    };
+
+    PALETTE.forEach(c => {
+      const b = document.createElement('button');
+      b.className = 'pal';
+      b.style.background = c;
+      b.title = `Colour ${c}`;
+      b.onclick = () => { const a = needBox(); if (a) styleRun(file, sec, a.run, a.input, { color: c }); };
+      tb.appendChild(b);
+    });
+
+    const custom = document.createElement('input');
+    custom.type = 'color';
+    custom.className = 'pal';
+    custom.value = '#ffffff';
+    custom.title = 'Custom colour';
+    custom.onchange = () => { const a = needBox(); if (a) styleRun(file, sec, a.run, a.input, { color: custom.value }); };
+    tb.appendChild(custom);
+
+    const clearColour = document.createElement('button');
+    clearColour.className = 'tiny';
+    clearColour.textContent = 'auto';
+    clearColour.title = 'Clear the colour so the text inherits the page default';
+    clearColour.onclick = () => { const a = needBox(); if (a) styleRun(file, sec, a.run, a.input, { color: '' }); };
+    tb.appendChild(clearColour);
+
+    const sep = () => { const d = document.createElement('div'); d.className = 'tbsep'; return d; };
+    tb.appendChild(sep());
+
+    const bold = document.createElement('button');
+    bold.className = 'tiny';
+    bold.textContent = 'B';
+    bold.style.fontWeight = '700';
+    bold.title = 'Bold the selected text (or the whole box)';
+    bold.onclick = () => {
+      const a = needBox();
+      if (a) styleRun(file, sec, a.run, a.input, { bold: !a.run.bold });
+    };
+    tb.appendChild(bold);
+
+    tb.appendChild(sep());
+
+    const sizeSel = document.createElement('select');
+    sizeSel.title = 'Text size for the selected text (or the whole box)';
+    SIZES.forEach(([value, text]) => {
+      const o = document.createElement('option');
+      o.value = value;
+      o.textContent = text;
+      sizeSel.appendChild(o);
+    });
+    sizeSel.onchange = () => {
+      const a = needBox();
+      if (!a) return;
+      styleRun(file, sec, a.run, a.input, { size: sizeSel.value });
+    };
+    tb.appendChild(sizeSel);
+
+    const tbHint = document.createElement('span');
+    tbHint.className = 'tbhint';
+    tbHint.textContent = 'Shift+Enter = new line';
+    tb.appendChild(tbHint);
+
+    body.appendChild(tb);
+
     sec.runs.forEach(run => {
       const wrap = document.createElement('div');
       wrap.className = 'run';
@@ -514,22 +627,20 @@ function renderSection(file, sec, i, total) {
 
       const meta = document.createElement('span');
       meta.className = 'runmeta';
-      meta.textContent = `text ${run.i}`;
+      // Show the size that is actually set, so the dropdown is not a mystery.
+      meta.textContent = `text ${run.i}${run.size ? ' \u00b7 ' + run.size : ''}`;
 
-      const swatch = document.createElement('input');
-      swatch.type = 'color';
-      swatch.className = 'swatch';
-      swatch.title = run.color ? `colour ${run.color}` : 'no colour set (inherits)';
-      swatch.value = /^#[0-9a-f]{6}$/i.test(run.color) ? run.color : '#ffffff';
       const input = document.createElement('textarea');
       input.value = run.raw;
       // size to the content, with a floor tall enough to read a paragraph
-      input.rows = Math.min(14, Math.max(4, Math.ceil(run.raw.length / 62)));
+      const lines = run.raw.split('\n').length;
+      input.rows = Math.min(16, Math.max(3, Math.ceil(run.raw.length / 62) + lines - 1));
       input.dataset.original = run.raw;
       input.dataset.i = run.i;
       input.oninput = () => card.classList.add('dirty');
+      input.onfocus = () => { active = { run, input }; };
 
-      // Remember the last selection: clicking a swatch or B blurs the textarea,
+      // Remember the last selection: clicking a toolbar button blurs this box,
       // and the selection offsets are what partial styling needs.
       const remember = () => {
         input.dataset.selStart = input.selectionStart;
@@ -538,21 +649,7 @@ function renderSection(file, sec, i, total) {
       ['select', 'keyup', 'mouseup', 'blur'].forEach(ev =>
         input.addEventListener(ev, remember));
 
-      const auto = document.createElement('button');
-      auto.className = 'tiny'; auto.textContent = 'auto';
-      auto.title = 'Clear the colour so the text inherits the page default';
-      auto.onclick = () => styleRun(file, sec, run, input, { color: '' });
-
-      const bold = document.createElement('button');
-      bold.className = 'tiny' + (run.bold ? ' on' : '');
-      bold.textContent = 'B';
-      bold.style.fontWeight = '700';
-      bold.title = 'Bold';
-      bold.onclick = () => styleRun(file, sec, run, input, { bold: !run.bold });
-
-      swatch.onchange = () => styleRun(file, sec, run, input, { color: swatch.value });
-
-      runbar.append(meta, swatch, auto, bold);
+      runbar.append(meta);
       wrap.appendChild(runbar);
       wrap.appendChild(input);
       body.appendChild(wrap);

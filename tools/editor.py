@@ -155,14 +155,18 @@ def section_info(folder: Path, name: str) -> dict:
     for i, (match, tag, attrs, text) in enumerate(textedit_mod.text_runs(html)):
         colour = re.search(r'color:\s*([^;"]+)', attrs)
         weight = re.search(r'font-weight:\s*([^;"]+)', attrs)
+        size = re.search(r'font-size:\s*([^;"]+)', attrs)
         runs.append({
             "i": i,
             "tag": tag,
             "text": re.sub(r"\s+", " ", text).strip(),
-            "raw": text,
+            # `raw` is what the editor's box shows, so breaks must read as
+            # newlines — the markup has them as <br>.
+            "raw": textedit_mod.to_text(text),
             "style": attrs[:120],
             "color": colour.group(1).strip() if colour else "",
             "bold": weight.group(1).strip() in ("700", "bold") if weight else False,
+            "size": size.group(1).strip() if size else "",
         })
 
     images = []
@@ -552,7 +556,10 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
         if idx < 0 or idx >= len(runs):
             return {"ok": False, "error": f"run {idx} out of range"}
         match = runs[idx][0]
-        write(path, html[:match.start(3)] + payload["text"] + html[match.end(3):])
+        # Newlines in the box become real breaks; a raw "\n" would collapse to
+        # a space and the line break would silently vanish.
+        write(path, html[:match.start(3)] + textedit_mod.to_html(payload["text"])
+              + html[match.end(3):])
         return {"ok": True, "rebuilt": rebuild(page)}
 
     # -------------------------------------------------------------- styling
@@ -568,19 +575,26 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
         match, tag, attrs, text = runs[idx]
         color = payload.get("color")
         bold = payload.get("bold")
+        size = payload.get("size")
         start, end = payload.get("start"), payload.get("end")
+
+        # Selection offsets are measured in the box's text, where a break is one
+        # newline; the markup holds it as a <br>. Compare and slice in the text
+        # form, then map back onto the markup so a slice never lands inside a tag.
+        plain = textedit_mod.to_text(text)
 
         # Whole run only when the selection really covers all of it. A selection
         # that merely STARTS at 0 is still partial (start <= 0 alone was wrong).
         whole = (start is None or end is None or start >= end
-                 or (start <= 0 and end >= len(text)))
+                 or (start <= 0 and end >= len(plain)))
 
         if whole:
-            new_attrs = textedit_mod.set_style_props(attrs, color=color, bold=bold)
+            new_attrs = textedit_mod.set_style_props(attrs, color=color, bold=bold, size=size)
             write(path, html[:match.start(2)] + new_attrs + html[match.end(2):])
         else:
-            head, mid, tail = text[:start], text[start:end], text[end:]
-            mid_attrs = textedit_mod.set_style_props(attrs, color=color, bold=bold)
+            m_start, m_end = textedit_mod._markup_offsets(text, int(start or 0), int(end or 0))
+            head, mid, tail = text[:m_start], text[m_start:m_end], text[m_end:]
+            mid_attrs = textedit_mod.set_style_props(attrs, color=color, bold=bold, size=size)
 
             if tag.lower() == "span":
                 # split into sibling spans, so only the slice is restyled
@@ -597,6 +611,8 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
                     bits.append(f"color: {color}")
                 if bold is not None:
                     bits.append(f"font-weight: {'700' if bold else '400'}")
+                if size:
+                    bits.append(f"font-size: {size}")
                 inner_style = f' style="{"; ".join(bits)};"' if bits else ""
                 inner = f"<span>{head}</span>" if head else ""
                 inner += f"<span{inner_style}>{mid}</span>"
