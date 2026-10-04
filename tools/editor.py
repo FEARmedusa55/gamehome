@@ -156,9 +156,15 @@ def section_info(folder: Path, name: str) -> dict:
         colour = re.search(r'color:\s*([^;"]+)', attrs)
         weight = re.search(r'font-weight:\s*([^;"]+)', attrs)
         size = re.search(r'font-size:\s*([^;"]+)', attrs)
+        css = re.search(r'style="([^"]*)"', attrs)
+        cls = re.search(r'class="([^"]*)"', attrs)
         runs.append({
             "i": i,
             "tag": tag,
+            # `css` and `class` are the run's own styling verbatim, which is what
+            # the editor needs to render it and to send it back unchanged.
+            "css": css.group(1).strip() if css else "",
+            "class": cls.group(1).strip() if cls else "",
             "text": re.sub(r"\s+", " ", text).strip(),
             # `raw` is what the editor's box shows, so breaks must read as
             # newlines — the markup has them as <br>.
@@ -168,6 +174,14 @@ def section_info(folder: Path, name: str) -> dict:
             "bold": weight.group(1).strip() in ("700", "bold") if weight else False,
             "size": size.group(1).strip() if size else "",
         })
+
+    # One editing box per block, not per run: styling part of a line splits a
+    # span, and those halves belong in the box they came from. The UI reads
+    # this to group the runs back together.
+    blocks = [
+        {"id": bid, "tag": tag, "runs": idxs}
+        for bid, tag, idxs in textedit_mod.group_runs(html)
+    ]
 
     images = []
     for i, img in enumerate(re.finditer(r"<img\b[^>]*>", html)):
@@ -185,6 +199,10 @@ def section_info(folder: Path, name: str) -> dict:
         "id": sections_mod.section_id(open_tag) if open_tag else "",
         "preview": sections_mod.strip_tags(html)[:110] or "(no text — image/decoration)",
         "runs": runs,
+        "blocks": blocks,
+        # The span class this page's text actually uses, so newly split spans
+        # look like every other span around them.
+        "spanClass": next((r["class"] for r in runs if r["class"]), "C9DxTc"),
         "images": images,
     }
 
@@ -489,6 +507,7 @@ def api_page(page_file: str) -> dict:
 
 ACTION_LABELS = {
     "set_text": "edit text",
+    "set_block": "edit paragraph",
     "set_style": "restyle text",
     "set_image": "swap image",
     "drop_section": "delete section",
@@ -547,6 +566,29 @@ def act(payload: dict) -> dict:
 
 def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
     # ------------------------------------------------------------------ text
+    if action == "set_block":
+        # Rewrite a whole block's insides as one go, from [{text, style}] parts.
+        # The editor sends this after styling or editing a paragraph, so the
+        # paragraph stays one block however many spans it now contains.
+        folder = ensure_staged(page)
+        path = folder / payload["section"]
+        html = textedit_mod.merge_spans(read(path))
+        want = payload.get("block")
+        target = next((s for s in textedit_mod.blocks(html) if s[2] == want), None)
+        if target is None:
+            return {"ok": False, "error": f"block {want!r} not found"}
+        c_start, c_end, _bid, _tag, _open = target
+
+        parts = payload.get("parts") or []
+        if not parts:
+            return {"ok": False, "error": "nothing to write"}
+        # Keep whatever span class the block already uses, so the new spans look
+        # like every other span in the page.
+        span_class = payload.get("spanClass") or "C9DxTc"
+        inner = textedit_mod.render_parts(parts, span_class=span_class)
+        write(path, html[:c_start] + inner + html[c_end:])
+        return {"ok": True, "rebuilt": rebuild(page)}
+
     if action == "set_text":
         folder = ensure_staged(page)
         path = folder / payload["section"]

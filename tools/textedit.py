@@ -56,6 +56,92 @@ def to_html(text: str) -> str:
     return re.sub(r"\r\n?|\n", "<br>", text)
 
 
+# Block-level elements. The editor shows one editing box per block rather than
+# one per span: styling part of a line splits a span in two, and those halves
+# belong in the box they came from, not in new ones of their own.
+BLOCK_TAGS = ("p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote", "div", "td")
+
+_ANY_TAG = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9]*)\b[^>]*?(/?)>")
+
+
+def blocks(html: str) -> list[tuple[int, int, int, str, str]]:
+    """(content_start, content_end, id, tag, open_tag) for every block element.
+
+    `content_start`/`content_end` bracket what is INSIDE the element, so a block
+    can be rewritten without touching its own tag. ids count every block seen,
+    so they stay stable for a given piece of markup.
+    """
+    found = []
+    stack: list[tuple[str, int, int, str]] = []
+    counter = 0
+    for m in _ANY_TAG.finditer(html):
+        closing, tag, self_closing = m.group(1), m.group(2).lower(), m.group(3)
+        if tag not in BLOCK_TAGS or self_closing:
+            continue
+        if closing:
+            if stack and stack[-1][0] == tag:
+                _, bid, content_start, open_tag = stack.pop()
+                found.append((content_start, m.start(), bid, tag, open_tag))
+            continue
+        counter += 1
+        stack.append((tag, counter, m.end(), m.group(0)))
+    return found
+
+
+def block_of(spans, pos: int) -> int | None:
+    """The innermost block id containing `pos`, from blocks() output."""
+    best = None
+    for start, end, bid, _tag, _open in spans:
+        if start <= pos < end:
+            # innermost = the shortest block that still contains the position
+            if best is None or (end - start) < best[0]:
+                best = (end - start, bid)
+    return best[1] if best else None
+
+
+def group_runs(html: str):
+    """Group the text runs by the block they sit in.
+
+    Returns [(block_id, tag, [run indexes])] in document order. This is what
+    lets a paragraph stay ONE editing box however many spans styling splits it
+    into.
+    """
+    spans = blocks(html)
+    runs = list(text_runs(html))
+    tags = {s[2]: s[3] for s in spans}
+    groups: dict[int, list[int]] = {}
+    order: list[int] = []
+    for i, item in enumerate(runs):
+        bid = block_of(spans, item[0].start())
+        if bid is None:
+            continue
+        if bid not in groups:
+            groups[bid] = []
+            order.append(bid)
+        groups[bid].append(i)
+    return [(bid, tags.get(bid, ""), groups[bid]) for bid in order]
+
+
+def render_parts(parts, span_class: str = "C9DxTc") -> str:
+    """Inner markup for a block, from [{text, style}] parts.
+
+    Rebuilds spans rather than trusting any HTML the browser hands back, so a
+    round trip through the editor cannot smuggle in new tags or attributes.
+    """
+    out = []
+    for part in parts:
+        text = to_html(str(part.get("text") or ""))
+        style = str(part.get("style") or "").strip()
+        if style and not style.endswith(";"):
+            style += ";"
+        if style:
+            cls = str(part.get("class") or span_class)
+            out.append(f'<span class="{cls}" style="{style}">{text}</span>')
+        else:
+            out.append(text)
+    return "".join(out)
+
+
 def _markup_offsets(raw: str, start: int, end: int) -> tuple[int, int]:
     """Map plain-text offsets onto the same positions inside `raw`.
 

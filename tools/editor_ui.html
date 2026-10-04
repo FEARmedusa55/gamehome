@@ -145,6 +145,17 @@
   }
   .tb .focusnote{font-size:11px;color:var(--warn)}
 
+  /* One editable box per paragraph. Styling shows here as you set it, so you
+     can see what is building what while you write. */
+  .blockbox{
+    min-height:34px;padding:8px 10px;background:#0b0e12;
+    border:1px solid var(--border-2);border-radius:6px;
+    font-family:inherit;font-size:14px;line-height:1.55;
+    outline:none;white-space:pre-wrap;word-break:break-word;
+  }
+  .blockbox:focus{border-color:var(--accent);background:#0d1117}
+  .blockbox:empty:before{content:'(empty)';color:var(--muted)}
+
   /* add-element menu */
   .elmenu{
     position:absolute;top:100%;left:0;margin-top:5px;z-index:30;
@@ -528,16 +539,25 @@ function renderSection(file, sec, i, total) {
   if (!sec.runs || !sec.runs.length) {
     body.innerHTML = '<p class="empty">No editable text in this section (it is an image or decoration block).</p>';
   } else {
-    // --- one toolbar for the whole section -------------------------------
-    // Colour, bold and size act on whichever box you were last in, and on the
-    // text you selected inside it — so styling a phrase no longer means
-    // splitting the paragraph, or adding a control per run.
+    // --- one styling toolbar, and one editable box per paragraph --------
+    // Select the words, click a colour / B / size: it applies to just those
+    // words and shows right there in the box, so you can see what is building
+    // what. Nothing sprouts an extra box for it.
     const PALETTE = ['#ffffff', '#434343', '#4a86e8', '#bf9000', '#ff0000'];
     const SIZES = [
       ['', 'size...'], ['10.6667pt', '10.7'], ['12pt', '12'],
       ['14pt', '14 (body)'], ['18pt', '18'], ['24pt', '24'],
       ['32pt', '32'], ['40pt', '40'],
     ];
+    const spanClass = sec.spanClass || 'C9DxTc';
+
+    // The toolbar styles the paragraph you were last in, and only the words you
+    // have selected inside it.
+    let active = null;
+    const activeBox = () => {
+      if (!active) { toast('Click into a paragraph first, then style it', true); return null; }
+      return active;
+    };
 
     const tb = document.createElement('div');
     tb.className = 'tb';
@@ -547,13 +567,13 @@ function renderSection(file, sec, i, total) {
     tbLabel.textContent = 'style';
     tb.appendChild(tbLabel);
 
-    // The toolbar styles the box you were last typing in. Clicking a toolbar
-    // button blurs that box but its remembered offsets survive, which is what
-    // lets a colour land on just the selected words.
-    let active = null;
-    const needBox = () => {
-      if (!active) { toast('Click into a text box first, then style it', true); return null; }
-      return active;
+    const sep = () => { const d = document.createElement('div'); d.className = 'tbsep'; return d; };
+
+    // What the selection currently covers, in the block's own text.
+    const covered = (a) => {
+      const parts = partsFromBox(a.box, spanClass);
+      const whole = parts.reduce((n, p) => n + (p.text || '').length, 0);
+      return { parts, whole, range: boxSelection(a.box) || { start: 0, end: whole } };
     };
 
     PALETTE.forEach(c => {
@@ -561,7 +581,9 @@ function renderSection(file, sec, i, total) {
       b.className = 'pal';
       b.style.background = c;
       b.title = `Colour ${c}`;
-      b.onclick = () => { const a = needBox(); if (a) styleRun(file, sec, a.run, a.input, { color: c }); };
+      b.onclick = () => {
+        const a = activeBox(); if (a) styleBlock(file, sec, a.block, a.box, 'color', c);
+      };
       tb.appendChild(b);
     });
 
@@ -570,34 +592,50 @@ function renderSection(file, sec, i, total) {
     custom.className = 'pal';
     custom.value = '#ffffff';
     custom.title = 'Custom colour';
-    custom.onchange = () => { const a = needBox(); if (a) styleRun(file, sec, a.run, a.input, { color: custom.value }); };
+    custom.onchange = () => {
+      const a = activeBox(); if (a) styleBlock(file, sec, a.block, a.box, 'color', custom.value);
+    };
     tb.appendChild(custom);
 
     const clearColour = document.createElement('button');
     clearColour.className = 'tiny';
     clearColour.textContent = 'auto';
     clearColour.title = 'Clear the colour so the text inherits the page default';
-    clearColour.onclick = () => { const a = needBox(); if (a) styleRun(file, sec, a.run, a.input, { color: '' }); };
+    clearColour.onclick = () => {
+      const a = activeBox(); if (a) styleBlock(file, sec, a.block, a.box, 'color', '');
+    };
     tb.appendChild(clearColour);
 
-    const sep = () => { const d = document.createElement('div'); d.className = 'tbsep'; return d; };
     tb.appendChild(sep());
 
-    const bold = document.createElement('button');
-    bold.className = 'tiny';
-    bold.textContent = 'B';
-    bold.style.fontWeight = '700';
-    bold.title = 'Bold the selected text (or the whole box)';
-    bold.onclick = () => {
-      const a = needBox();
-      if (a) styleRun(file, sec, a.run, a.input, { bold: !a.run.bold });
+    const boldBtn = document.createElement('button');
+    boldBtn.className = 'tiny';
+    boldBtn.textContent = 'B';
+    boldBtn.style.fontWeight = '700';
+    boldBtn.title = 'Bold the selected words (click again to unbold)';
+    boldBtn.onclick = () => {
+      const a = activeBox(); if (!a) return;
+      const { parts, range } = covered(a);
+      // Already all bold? Then this click is an unbold.
+      let at = 0, allBold = true, touched = 0;
+      for (const p of parts) {
+        const a2 = Math.max(range.start - at, 0);
+        const b2 = Math.min(range.end - at, (p.text || '').length);
+        if (a2 < b2) {
+          touched++;
+          if (!/font-weight:\s*(700|bold)/i.test(p.style || '')) allBold = false;
+        }
+        at += (p.text || '').length;
+      }
+      styleBlock(file, sec, a.block, a.box, 'font-weight',
+                 (touched && allBold) ? '' : '700');
     };
-    tb.appendChild(bold);
+    tb.appendChild(boldBtn);
 
     tb.appendChild(sep());
 
     const sizeSel = document.createElement('select');
-    sizeSel.title = 'Text size for the selected text (or the whole box)';
+    sizeSel.title = 'Text size for the selected words (or the whole paragraph)';
     SIZES.forEach(([value, text]) => {
       const o = document.createElement('option');
       o.value = value;
@@ -605,20 +643,34 @@ function renderSection(file, sec, i, total) {
       sizeSel.appendChild(o);
     });
     sizeSel.onchange = () => {
-      const a = needBox();
-      if (!a) return;
-      styleRun(file, sec, a.run, a.input, { size: sizeSel.value });
+      const a = activeBox(); if (!a) return;
+      styleBlock(file, sec, a.block, a.box, 'font-size', sizeSel.value);
     };
     tb.appendChild(sizeSel);
 
     const tbHint = document.createElement('span');
     tbHint.className = 'tbhint';
-    tbHint.textContent = 'Shift+Enter = new line';
+    tbHint.textContent = 'select words, then style \u00b7 Enter = new line';
     tb.appendChild(tbHint);
 
     body.appendChild(tb);
 
-    sec.runs.forEach(run => {
+    // One box per block. sec.blocks groups the runs by the paragraph they sit
+    // in, so a paragraph that styling has split into three spans is still one
+    // box here.
+    const blocks = (sec.blocks && sec.blocks.length)
+      ? sec.blocks
+      : (sec.runs || []).map(r => ({ id: 'r' + r.i, tag: 'text', runs: [r.i] }));
+
+    blocks.forEach(blk => {
+      const runs = (blk.runs || []).map(i => sec.runs[i]).filter(Boolean);
+      if (!runs.length) return;
+      const parts = runs.map(r => ({
+        text: r.raw,
+        style: r.css || '',
+        class: r.class || spanClass,
+      }));
+
       const wrap = document.createElement('div');
       wrap.className = 'run';
 
@@ -627,31 +679,29 @@ function renderSection(file, sec, i, total) {
 
       const meta = document.createElement('span');
       meta.className = 'runmeta';
-      // Show the size that is actually set, so the dropdown is not a mystery.
-      meta.textContent = `text ${run.i}${run.size ? ' \u00b7 ' + run.size : ''}`;
+      meta.textContent = `${blk.tag || 'text'} ${blk.id}` +
+        (parts.length > 1 ? ` \u00b7 ${parts.length} styles` : '');
 
-      const input = document.createElement('textarea');
-      input.value = run.raw;
-      // size to the content, with a floor tall enough to read a paragraph
-      const lines = run.raw.split('\n').length;
-      input.rows = Math.min(16, Math.max(3, Math.ceil(run.raw.length / 62) + lines - 1));
-      input.dataset.original = run.raw;
-      input.dataset.i = run.i;
-      input.oninput = () => card.classList.add('dirty');
-      input.onfocus = () => { active = { run, input }; };
+      const box = document.createElement('div');
+      box.className = 'blockbox';
+      box.contentEditable = 'true';
+      box.spellcheck = false;
+      box.innerHTML = partsToHtml(parts);
+      box.dataset.block = blk.id;
+      box.onfocus = () => { active = { block: blk, box }; };
+      box.onblur = () => saveBlock(file, sec, blk, box);
+      // Enter adds a line inside the paragraph rather than inventing a new
+      // block: that keeps one paragraph as one box.
+      box.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          document.execCommand('insertLineBreak');
+        }
+      });
 
-      // Remember the last selection: clicking a toolbar button blurs this box,
-      // and the selection offsets are what partial styling needs.
-      const remember = () => {
-        input.dataset.selStart = input.selectionStart;
-        input.dataset.selEnd = input.selectionEnd;
-      };
-      ['select', 'keyup', 'mouseup', 'blur'].forEach(ev =>
-        input.addEventListener(ev, remember));
-
-      runbar.append(meta);
+      runbar.appendChild(meta);
       wrap.appendChild(runbar);
-      wrap.appendChild(input);
+      wrap.appendChild(box);
       body.appendChild(wrap);
     });
 
@@ -762,6 +812,132 @@ async function addElement(file, template, label) {
     await selectPage(file);
   } catch (e) { toast(e.message, true); }
 }
+// --- block editing helpers ------------------------------------------------
+// A paragraph is ONE editable box. Styling part of a line splits it into more
+// spans on the server, but those stay in the box they came from, so nothing
+// sprouts a new box of its own and you can see the styling as you set it.
+
+function escHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+// Text of a node (or fragment), counting a line break as one character so the
+// offsets line up with how the box reads.
+function nodeText(node) {
+  let out = '';
+  node.childNodes.forEach(c => {
+    if (c.nodeType === 3) out += c.nodeValue;
+    else if (c.nodeName === 'BR') out += '\n';
+    else out += nodeText(c);
+  });
+  return out;
+}
+
+function partsToHtml(parts) {
+  return parts.map(p => {
+    const text = escHtml(p.text || '').replace(/\n/g, '<br>');
+    const style = (p.style || '').trim();
+    if (!style) return text;
+    const cls = escHtml(p.class || 'C9DxTc');
+    return `<span class="${cls}" style="${escHtml(style)}">${text}</span>`;
+  }).join('');
+}
+
+// Read the box back as parts: bare text with no styling, spans with their own.
+function partsFromBox(box, fallbackClass) {
+  const parts = [];
+  box.childNodes.forEach(n => {
+    if (n.nodeType === 3) {
+      if (n.nodeValue) parts.push({ text: n.nodeValue, style: '', class: fallbackClass });
+    } else if (n.nodeType === 1) {
+      parts.push({
+        text: nodeText(n),
+        style: n.getAttribute('style') || '',
+        class: n.getAttribute('class') || fallbackClass,
+      });
+    }
+  });
+  return parts;
+}
+
+// Set or clear one declaration inside a style string.
+function setCss(css, prop, value) {
+  const keep = [];
+  let found = false;
+  String(css || '').split(';').forEach(decl => {
+    if (!decl.includes(':')) return;
+    const name = decl.split(':')[0].trim().toLowerCase();
+    if (name === prop) {
+      found = true;
+      if (value) keep.push(`${prop}: ${value}`);
+      return;
+    }
+    keep.push(decl.trim());
+  });
+  if (!found && value) keep.push(`${prop}: ${value}`);
+  return keep.join('; ') + (keep.length ? ';' : '');
+}
+
+// Restyle just the [start, end) slice of the block's text, splitting parts as
+// needed so only the selected words change.
+function styleParts(parts, start, end, prop, value) {
+  const out = [];
+  let at = 0;
+  for (const p of parts) {
+    const text = p.text || '';
+    const a = Math.max(start - at, 0);
+    const b = Math.min(end - at, text.length);
+    if (a >= b) {
+      out.push(p);
+    } else {
+      if (a > 0) out.push({ text: text.slice(0, a), style: p.style, class: p.class });
+      out.push({ text: text.slice(a, b), style: setCss(p.style, prop, value), class: p.class });
+      if (b < text.length) out.push({ text: text.slice(b), style: p.style, class: p.class });
+    }
+    at += text.length;
+  }
+  return out;
+}
+
+// Where the caret/selection sits inside the box, as character offsets into the
+// text the box shows. Null when there is no usable selection.
+function boxSelection(box) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return null;
+  const r = sel.getRangeAt(0);
+  if (r.collapsed) return null;
+  if (!box.contains(r.startContainer) || !box.contains(r.endContainer)) return null;
+  const before = document.createRange();
+  before.selectNodeContents(box);
+  before.setEnd(r.startContainer, r.startOffset);
+  const start = nodeText(before.cloneContents()).length;
+  return { start, end: start + nodeText(r.cloneContents()).length };
+}
+
+async function styleBlock(file, sec, blk, box, prop, value) {
+  const parts = partsFromBox(box, sec.spanClass || 'C9DxTc');
+  if (!parts.length) return;
+  const whole = parts.reduce((n, p) => n + (p.text || '').length, 0);
+  const range = boxSelection(box) || { start: 0, end: whole };
+  const next = styleParts(parts, range.start, range.end, prop, value);
+  box.innerHTML = partsToHtml(next);
+  await saveBlock(file, sec, blk, box,
+                  range.end - range.start < whole
+                    ? 'Style applied to the selected text'
+                    : 'Style updated');
+}
+
+async function saveBlock(file, sec, blk, box, message) {
+  const parts = partsFromBox(box, sec.spanClass || 'C9DxTc');
+  if (!parts.length) return;
+  try {
+    await post({ action: 'set_block', file, section: sec.file, block: blk.id,
+                 spanClass: sec.spanClass, parts });
+    if (message) toast(message);
+    reloadPreview();
+  } catch (e) { toast(e.message, true); }
+}
+
 async function styleRun(file, sec, run, input, changes) {
   try {
     // If the text was edited but not saved, save it first — otherwise the
