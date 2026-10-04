@@ -495,6 +495,7 @@ ACTION_LABELS = {
     "move_page": "reorder",
     "add_category": "add category",
     "rename_category": "rename",
+    "move_child": "move sub-page",
     "remove_category": "remove category",
 }
 
@@ -807,6 +808,21 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
         ensure_staged(filename)
         rebuild(filename)
         return {"ok": True, "page": filename}
+
+    if action == "move_child":
+        parent = (payload.get("parent") or "").strip()
+        slug = (payload.get("slug") or "").strip()
+        direction = payload.get("dir") or "up"
+        if not parent or not slug:
+            return {"ok": False, "error": "need a parent and a sub-page"}
+        if not parent.startswith("/"):
+            parent = "/" + parent
+        if not slug.startswith("/"):
+            slug = "/" + slug
+        platforms_mod._apply_to_all(
+            lambda h: platforms_mod._move_child(h, parent, slug, direction),
+            "sub-page reorder")
+        return {"ok": True}
 
     if action == "rename_category":
         slug = (payload.get("slug") or "").strip().lstrip("/")

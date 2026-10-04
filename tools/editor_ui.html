@@ -325,6 +325,12 @@ function addPageUnder(row) {
     .catch(e => toast(e.message, true));
 }
 
+function moveChild(parent, child, dir) {
+  post({ action: 'move_child', parent: parent.slug, slug: child.slug, dir: dir })
+    .then(() => { toast('Moved ' + child.label); return loadState(); })
+    .catch(e => toast(e.message, true));
+}
+
 function renameCategory(row) {
   const next = prompt(`Rename "${row.label}" to:`, row.label);
   if (!next || !next.trim() || next.trim() === row.label) return;
@@ -375,9 +381,24 @@ function renderTree() {
     if (children.length) {
       const kids = document.createElement('ul');
       kids.className = 'kids';
-      children.forEach(c => {
+      children.forEach((c, ci) => {
         const kli = document.createElement('li');
-        kli.appendChild(treeRow({ label: c.label, file: c.href }));
+        // Sub-pages get the same tools as a category: rename, reorder within
+        // the group, and delete (which moves the page to _trash).
+        kli.appendChild(treeRow({
+          label: c.label,
+          file: c.href,
+          tools: [
+            tinyBtn('\u270e', 'Rename this page',
+                    () => renameCategory({ slug: c.slug, label: c.label, nopage: false })),
+            tinyBtn('\u2191', 'Move up inside ' + r.label,
+                    () => moveChild(r, c, 'up'), ci === 0),
+            tinyBtn('\u2193', 'Move down inside ' + r.label,
+                    () => moveChild(r, c, 'down'), ci === children.length - 1),
+            tinyBtn('\u2212', 'Delete this page (it moves to _trash)',
+                    () => removeCategory({ slug: c.slug, label: c.label, nopage: false })),
+          ],
+        }));
         kids.appendChild(kli);
       });
       li.appendChild(kids);

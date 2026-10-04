@@ -487,16 +487,30 @@ def label_from_slug(slug: str, parent: str) -> str:
 
 
 def _nest_parent(own: str, parent_slug: str) -> str:
-    """Give a nav item the hidden checkbox + caret it needs to fold children."""
+    """
+    Give a nav item the hidden checkbox + caret it needs to fold children.
+
+    The <li> tag is matched loosely on purpose. A nav-only group's tag is
+    `<li data-mmnopage="1" jsname="ibnC6b" …>` — different attribute order —
+    so matching the literal `<li jsname="ibnC6b"` skipped it, leaving the
+    group with a caret pointing at a checkbox that was never inserted and
+    therefore unable to unfold.
+    """
     if "mmSubToggle" in own:
         return own
     key = "mmsub-" + re.sub(r"[^a-z0-9]+", "-", parent_slug.strip("/")).strip("-")
     toggle = f'<input type="checkbox" class="mmSubToggle" id="{key}">'
     caret = f'<label class="mmSubCaret" for="{key}" title="Show sub-pages"></label>'
-    own = own.replace("<li jsname=\"ibnC6b\"",
-                      "<li class=\"mmHasSub\" jsname=\"ibnC6b\"", 1)
-    own = re.sub(r'(<li class="mmHasSub" jsname="ibnC6b"[^>]*>)',
-                 lambda m: m.group(1) + toggle, own, count=1)
+
+    def tag_add_class(m):
+        tag = m.group(0)
+        if 'class="' in tag:
+            return re.sub(r'class="([^"]*)"', r'class="\1 mmHasSub"', tag, count=1)
+        return tag[:-1] + ' class="mmHasSub">'
+
+    own = re.sub(r"<li\b[^>]*>", tag_add_class, own, count=1)
+    # the checkbox goes first, so `~` can reach the child <ul>
+    own = re.sub(r"<li\b[^>]*>", lambda m: m.group(0) + toggle, own, count=1)
     # the caret sits after the link, inside the item's row
     return own.replace("</a>", "</a>" + caret, 1)
 
@@ -530,8 +544,14 @@ def _apply_subs(html: str, groups: dict, active: str) -> str:
     for start, end, slug, _, own, tail in items(html):
         clean = re.sub(r"\s*\blhZOrc\b", "", own)
         if slug in groups:
+            # Keep the order already in the file, so a manual move sticks;
+            # anything new is appended. (Sorted order would undo every move.)
+            existing = [c["slug"] for c in child_items(tail)]
+            wanted = groups[slug]
+            ordered = ([k for s in existing for k in wanted if k[0] == s]
+                       + [k for k in wanted if k[0] not in existing])
             kids = "".join(_child_li(clean, cslug, clabel, active)
-                           for cslug, clabel in groups[slug])
+                           for cslug, clabel in ordered)
             new = _nest_parent(clean, slug) + SUB_UL + kids + "</ul></li>"
         else:
             new = clean + "</li>"
@@ -746,6 +766,40 @@ def remove_nav_item(html: str, slug_path: str) -> str:
     if out == html:
         return html
     return _tidy_parents(out)
+
+
+def _move_child(html: str, parent_slug: str, child_slug: str,
+                direction: str) -> str:
+    """
+    Swap a level-2 child with its neighbour inside its parent's list.
+
+    _apply_subs preserves whatever order it finds, so a move made here
+    survives later re-derivations.
+    """
+    for start, end in nav_item_spans(html):
+        raw = html[start:end]
+        own = raw.partition(SUB_UL)[0]
+        slug = URL_RE.search(own)
+        if not slug or slug.group(1) != parent_slug:
+            continue
+        block = re.search(re.escape(SUB_UL) + r"(.*?)</ul>", raw, re.S)
+        if not block:
+            return html
+        inner = block.group(1)
+        found = list(re.finditer(
+            r'<li\b[^>]*data-nav-level="2"[^>]*>.*?</li>', inner, re.S))
+        blocks = [f.group(0) for f in found]
+        idx = next((i for i, b in enumerate(blocks)
+                    if f'data-url="{child_slug}"' in b), None)
+        if idx is None:
+            return html
+        j = idx - 1 if direction == "up" else idx + 1
+        if j < 0 or j >= len(blocks):
+            return html
+        blocks[idx], blocks[j] = blocks[j], blocks[idx]
+        new_raw = raw[:block.start(1)] + "".join(blocks) + raw[block.end(1):]
+        return html[:start] + new_raw + html[end:]
+    return html
 
 
 def _relabel(html: str, slug_path: str, label: str) -> str:
