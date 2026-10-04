@@ -52,6 +52,20 @@ LABEL_PREFIX_CHILD = "\u2004\u2004\u2004\u2004- "
 SUB_UL = '<ul class="mmSub">'
 SUB_STYLE_ID = "mm-subnav-css"
 SUB_JS_ID = "mm-subnav-js"
+SITE_CSS_ID = "mm-site-css"
+
+# Google Sites hides the top bar — the strip holding the site title and the
+# overlay that gives it its colour — above roughly 1300px, preferring a
+# permanent sidebar there. Forcing it back on means the bar and title are
+# present at every width.
+#
+# Note it does NOT bring back the hamburger: above ~600px Google's script
+# never creates that button at all (it only builds it for the drawer layout),
+# so there is nothing in the DOM to reveal.
+SITE_CSS = """<style id="mm-site-css">
+.VLoccc{display:block !important}
+@media (min-width:1300px){.VLoccc .Pvc6xe{padding-left:250px !important}}
+</style>"""
 
 # Remembering which groups are open needs script: the fold state lives in a
 # checkbox that is re-created from the page's own markup on every load, so
@@ -582,6 +596,15 @@ def _ensure_substyle(html: str) -> str:
     return html if at == -1 else html[:at] + SUB_CSS + html[at:]
 
 
+def _ensure_sitestyle(html: str) -> str:
+    """Add/replace the force-visible-top-bar rule, before </head>."""
+    if SITE_CSS_ID in html:
+        return re.sub(r'<style id="mm-site-css">.*?</style>',
+                      lambda m: SITE_CSS, html, count=1, flags=re.S)
+    at = html.rfind("</head>")
+    return html if at == -1 else html[:at] + SITE_CSS + html[at:]
+
+
 def _ensure_subjs(html: str) -> str:
     """Add/replace the fold-memory script, just before </body>."""
     if SUB_JS_ID in html:
@@ -652,7 +675,7 @@ def cmd_subs(args) -> int:
         own_slug = "/" + (target.parent.name if target.name == "_head.html"
                           else target.stem)
         active = own_slug if own_slug in child_slugs else current_slug(html)
-        new = _apply_subs(_ensure_substyle(html), groups, active)
+        new = _apply_subs(_ensure_sitestyle(_ensure_substyle(html)), groups, active)
         if new != html:
             write(target, new)
             changed += 1
