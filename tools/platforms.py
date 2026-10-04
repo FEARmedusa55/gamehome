@@ -228,11 +228,38 @@ def _apply_to_all(fn, what: str) -> int:
     return changed
 
 
-def _insert_li(html: str, new_li: str, after_slug: str) -> str:
-    for start, end, slug, _, _, _ in items(html):
-        if slug == after_slug:
-            return html[:end] + new_li + html[end:]
-    return html
+def _append_li(html: str, new_li: str) -> str:
+    """Add a nav entry at the end of the top-level nav list.
+
+    Used when there is no anchor to insert after — including when the nav has
+    been emptied entirely and a new entry is the first one.
+    """
+    nav = html.find("<nav")
+    if nav == -1:
+        return html
+    nav_end = html.find("</nav>", nav)
+    if nav_end == -1:
+        return html
+    ul = html.find("<ul", nav)
+    if ul == -1 or ul > nav_end:
+        return html
+    close = html.rfind("</ul>", ul, nav_end)
+    if close == -1:
+        return html
+    return html[:close] + new_li + html[close:]
+
+
+def _insert_li(html: str, new_li: str, after_slug: str | None) -> str:
+    """Insert a nav entry after after_slug, or append when that is not there.
+
+    Falling back to append matters: an anchor that no longer exists used to
+    make this a silent no-op, so adding a page appeared to do nothing at all.
+    """
+    if after_slug:
+        for start, end, slug, _, _, _ in items(html):
+            if slug == after_slug:
+                return html[:end] + new_li + html[end:]
+    return _append_li(html, new_li)
 
 
 def _remove_li(html: str, slug: str) -> str:
@@ -424,6 +451,21 @@ def fresh_li(donor_own: str, slug_path: str, filename: str, label: str,
     return out + "</li>"
 
 
+NAV_ITEM_TEMPLATE = HERE / "tools" / "templates" / "nav-item.html"
+
+
+def default_nav_item() -> str:
+    """A nav entry's own markup to clone when no real one is available.
+
+    Adding a page normally clones an existing entry, so the new one carries the
+    site's own classes. Once every platform has been cleared there is nothing
+    left to clone — and an empty nav is exactly when you most want to add one —
+    so this pristine copy is the fallback. It is byte-identical to an item from
+    the original mirror; fresh_li rewrites the link, slug and label.
+    """
+    return NAV_ITEM_TEMPLATE.read_bytes().decode("utf-8")
+
+
 def _donor_item(after_slug: str):
     """The donor item's OWN markup (never its children) and the file it came from."""
     for cand in page_files():
@@ -431,7 +473,7 @@ def _donor_item(after_slug: str):
         for _, _, slug, _, own, _ in items(html):
             if slug == after_slug:
                 return own, cand.name
-    return None, None
+    return default_nav_item(), "<built-in>"
 
 
 def cmd_link(args) -> int:

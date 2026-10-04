@@ -702,6 +702,39 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
         return {"ok": True, "rebuilt": rebuild(page), "section": name}
 
     # ----------------------------------------------------------------- pages
+    # Adding an entry normally clones one that already exists, so the new row
+    # carries the site's own classes. `nav_donor_own` returns None when there is
+    # no such entry, and callers fall back to the built-in pristine item in
+    # tools/templates/nav-item.html — an emptied nav is exactly when you most
+    # want to add to it, and there is then nothing left to clone.
+    # `anchor=None` means append to the end of the nav list.
+    def nav_donor_own(want: str | None) -> str | None:
+        if want:
+            for cand in site_pages():
+                p = HERE / cand
+                if not p.exists():
+                    continue
+                for _, _, s, _, own, _ in platforms_mod.items(read(p)):
+                    if s == want:
+                        return own
+        return None
+
+    def any_nav_anchor() -> str | None:
+        for cand in site_pages():
+            p = HERE / cand
+            if not p.exists():
+                continue
+            its = list(platforms_mod.items(read(p)))
+            if its:
+                return its[-1][2]
+        return None
+
+    def any_page_stem() -> str:
+        for cand in site_pages():
+            if (HERE / cand).exists():
+                return cand
+        return "index.html"
+
     if action == "add_group":
         # A nav entry with nothing behind it — a group heading you can nest
         # pages under. No page file is created.
@@ -717,18 +750,8 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
                         "error": f'a nav entry "/{slug}" already exists'}
 
         label_text = payload.get("label") or slug.replace("-", " ").title()
-        anchor = payload.get("after") or "/windows"
-
-        template = None
-        for cand in site_pages():
-            for _, _, s, _, own, _ in platforms_mod.items(read(HERE / cand)):
-                if s == anchor:
-                    template = own
-                    break
-            if template:
-                break
-        if template is None:
-            return {"ok": False, "error": f"no nav entry {anchor!r} to copy"}
+        anchor = payload.get("after") or any_nav_anchor()
+        template = nav_donor_own(anchor) or platforms_mod.default_nav_item()
 
         new_li = platforms_mod.fresh_li(template, "/" + slug, f"{slug}.html",
                                         label_text, nopage=True)
@@ -758,17 +781,10 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
 
         label_text = payload.get("label") or slug.replace("-", " ").title()
         in_nav = payload.get("in_nav", True)
-        anchor = payload.get("after") or "/windows"
-
-        def donor_own(want: str):
-            for cand in site_pages():
-                for _, _, s, _, own, _ in platforms_mod.items(read(HERE / cand)):
-                    if s == want:
-                        return own
-            return None
+        anchor = payload.get("after") or any_nav_anchor()
 
         if in_nav and parent:
-            own = donor_own(parent)
+            own = nav_donor_own(parent)
             if own is None:
                 return {"ok": False, "error": f"no nav entry {parent!r} to nest under"}
             child_li = platforms_mod.fresh_li(own, "/" + stem, filename,
@@ -777,9 +793,7 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
                 lambda h: platforms_mod._insert_child(h, parent, child_li),
                 "nav insert")
         elif in_nav:
-            own = donor_own(anchor)
-            if own is None:
-                return {"ok": False, "error": "could not find a nav entry to copy"}
+            own = nav_donor_own(anchor) or platforms_mod.default_nav_item()
             new_li = platforms_mod.fresh_li(own, "/" + stem, filename, label_text)
             platforms_mod._apply_to_all(
                 lambda h: platforms_mod._insert_li(h, new_li, anchor), "nav insert")
@@ -789,7 +803,7 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
         # A child page borrows its category's page, so it looks like a sibling.
         from_page = payload.get("from_page") or (
             f"{parent.strip('/')}.html" if parent and (HERE / f"{parent.strip('/')}.html").exists()
-            else "apple-tv.html")
+            else any_page_stem())
         donor = read(HERE / from_page)
         first = donor.index("<section")
         last = donor.rindex("</section>") + len("</section>")
