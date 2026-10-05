@@ -153,6 +153,14 @@
   .blockbox a{color:inherit}
   .blockbox a[href]{text-decoration:underline}
 
+  /* the editor's own top bar: the styling controls live here, not per section */
+  .topbar{
+    position:sticky;top:0;z-index:30;
+    background:var(--panel);border-bottom:1px solid var(--border);
+    padding:6px 14px;
+  }
+  .topbar .tb{margin:0;flex-wrap:wrap;row-gap:6px}
+
   /* the button list: label, link, colour, size, order */
   .btnpanel{
     border:1px solid var(--border);border-radius:8px;padding:8px 10px;
@@ -243,6 +251,10 @@
   <button id="fullscreen">Full screen</button>
   <button id="openSite" class="primary">Open site</button>
 </header>
+
+<!-- The styling bar: one for the whole editor, like a word processor's, acting
+     on whichever paragraph you are in and the words you have selected there. -->
+<div class="topbar" id="topbar"></div>
 
 <div class="layout" id="layout">
   <aside>
@@ -684,171 +696,6 @@ function renderSection(file, sec, i, total) {
       body.appendChild(none);
     }
   } else {
-    // --- one styling toolbar, and one editable box per paragraph --------
-    // Select the words, click a colour / B / size: it applies to just those
-    // words and shows right there in the box, so you can see what is building
-    // what. Nothing sprouts an extra box for it.
-    const PALETTE = ['#ffffff', '#434343', '#4a86e8', '#bf9000', '#ff0000'];
-    const SIZES = [
-      ['', 'size...'], ['10.6667pt', '10.7'], ['12pt', '12'],
-      ['14pt', '14 (body)'], ['18pt', '18'], ['24pt', '24'],
-      ['32pt', '32'], ['40pt', '40'],
-    ];
-    const spanClass = sec.spanClass || 'C9DxTc';
-
-    // The toolbar styles the paragraph you were last in, and only the words you
-    // have selected inside it.
-    let active = null;
-    const activeBox = () => {
-      if (!active) { toast('Click into a paragraph first, then style it', true); return null; }
-      return active;
-    };
-
-    const tb = document.createElement('div');
-    tb.className = 'tb';
-
-    const tbLabel = document.createElement('span');
-    tbLabel.className = 'tblabel';
-    tbLabel.textContent = 'style';
-    tb.appendChild(tbLabel);
-
-    const sep = () => { const d = document.createElement('div'); d.className = 'tbsep'; return d; };
-
-    // What the selection currently covers, in the block's own text.
-    //
-    // The range recorded while the cursor was in the box is used: reading the
-    // live selection at click time is unreliable, because pressing a toolbar
-    // control moves the selection before the handler runs. Colour and size go
-    // through this path and land on the right words; the live read is only a
-    // fallback for a box that was never touched.
-    const covered = (a) => {
-      const parts = partsFromBox(a.box, spanClass);
-      const whole = parts.reduce((n, p) => n + (p.text || '').length, 0);
-      const live = a.range || boxSelection(a.box);
-      return { parts, whole, range: live || { start: 0, end: whole } };
-    };
-
-    PALETTE.forEach(c => {
-      const b = document.createElement('button');
-      b.className = 'pal';
-      b.style.background = c;
-      b.title = `Colour ${c}`;
-      b.onclick = () => {
-        const a = activeBox(); if (a) styleBlock(file, sec, a.block, a.box, 'color', c, a.range);
-      };
-      tb.appendChild(b);
-    });
-
-    const custom = document.createElement('input');
-    custom.type = 'color';
-    custom.className = 'pal';
-    custom.value = '#ffffff';
-    custom.title = 'Custom colour';
-    custom.onchange = () => {
-      const a = activeBox(); if (a) styleBlock(file, sec, a.block, a.box, 'color', custom.value, a.range);
-    };
-    tb.appendChild(custom);
-
-    const clearColour = document.createElement('button');
-    clearColour.className = 'tiny';
-    clearColour.textContent = 'auto';
-    clearColour.title = 'Clear the colour so the text inherits the page default';
-    clearColour.onclick = () => {
-      const a = activeBox(); if (a) styleBlock(file, sec, a.block, a.box, 'color', '', a.range);
-    };
-    tb.appendChild(clearColour);
-
-    // Link controls. The URL box is separate from the words, so the flow is:
-    // select the words, paste a URL, press link.
-    const linkUrl = document.createElement('input');
-    linkUrl.type = 'url';
-    linkUrl.className = 'linkurl';
-    linkUrl.placeholder = 'link url';
-    linkUrl.title = 'The address to link the selected words to';
-    tb.appendChild(linkUrl);
-
-    const linkBtn = document.createElement('button');
-    linkBtn.className = 'tiny';
-    linkBtn.textContent = 'link';
-    linkBtn.title = 'Make the selected words a link (opens in a new tab)';
-    linkBtn.onclick = () => {
-      const a = activeBox(); if (!a) return;
-      const url = (linkUrl.value || '').trim();
-      if (!url) { toast('Paste a URL in the link box first', true); return; }
-      linkBlock(file, sec, a.block, a.box, url, a.range);
-    };
-    tb.appendChild(linkBtn);
-
-    const unlinkBtn = document.createElement('button');
-    unlinkBtn.className = 'tiny';
-    unlinkBtn.textContent = 'unlink';
-    unlinkBtn.title = 'Remove the link from the selected words';
-    unlinkBtn.onclick = () => {
-      const a = activeBox(); if (!a) return;
-      linkBlock(file, sec, a.block, a.box, '', a.range);
-    };
-    tb.appendChild(unlinkBtn);
-
-    tb.appendChild(sep());
-
-    const boldBtn = document.createElement('button');
-    boldBtn.className = 'tiny';
-    boldBtn.textContent = 'B';
-    boldBtn.style.fontWeight = '700';
-    boldBtn.title = 'Bold the selected words (click again to unbold)';
-    boldBtn.onclick = () => {
-      const a = activeBox(); if (!a) return;
-      const { parts, range } = covered(a);
-      // A toggle, like any rich text editor: if everything the selection covers
-      // is already bold, this click removes it instead.
-      let at = 0, allBold = true, touched = 0;
-      for (const p of parts) {
-        const a2 = Math.max(range.start - at, 0);
-        const b2 = Math.min(range.end - at, (p.text || '').length);
-        if (a2 < b2) {
-          touched++;
-          if (!/font-weight:\s*(700|bold)/i.test(p.style || '')) allBold = false;
-        }
-        at += (p.text || '').length;
-      }
-      styleBlock(file, sec, a.block, a.box, 'font-weight',
-                 (touched && allBold) ? '' : '700', range);
-    };
-    tb.appendChild(boldBtn);
-
-    tb.appendChild(sep());
-
-    const sizeSel = document.createElement('select');
-    sizeSel.title = 'Text size for the selected words (or the whole paragraph)';
-    SIZES.forEach(([value, text]) => {
-      const o = document.createElement('option');
-      o.value = value;
-      o.textContent = text;
-      sizeSel.appendChild(o);
-    });
-    sizeSel.onchange = () => {
-      const a = activeBox(); if (!a) return;
-      styleBlock(file, sec, a.block, a.box, 'font-size', sizeSel.value, a.range);
-    };
-    tb.appendChild(sizeSel);
-
-    const tbHint = document.createElement('span');
-    tbHint.className = 'tbhint';
-    tbHint.textContent = 'select words, then style \u00b7 Enter = new line';
-    tb.appendChild(tbHint);
-
-    body.appendChild(tb);
-
-    // Keep the paragraph's focus and selection when a toolbar control is
-    // pressed. Without this the mousedown blurs the box, the selection is lost,
-    // and a colour lands on the whole paragraph instead of the words you picked.
-    // The colour picker and size list need real mouse events, so they are let
-    // through.
-    tb.addEventListener('mousedown', e => {
-      if (e.target.closest('select, input')) return;
-      e.preventDefault();
-    });
-
     // One box per block. sec.blocks groups the runs by the paragraph they sit
     // in, so a paragraph that styling has split into three spans is still one
     // box here.
@@ -892,7 +739,7 @@ function renderSection(file, sec, i, total) {
       // click time is unreliable — pressing a toolbar control moves focus, and
       // the selection can be gone by then, which would style the whole
       // paragraph instead of the words you picked.
-      box.onfocus = () => { active = { block: blk, box, range: null }; };
+      box.onfocus = () => { active = { file, sec, block: blk, box, range: null }; };
       const rememberSel = () => {
         // Ignore the select event our own selectRange() triggers: the browser
         // reports that restored range from the span boundary, which reads one
@@ -1212,6 +1059,177 @@ async function linkBlock(file, sec, blk, box, href, range) {
   setTimeout(() => { suppressRemember = false; }, 0);
   await saveBlock(file, sec, blk, box, href ? 'Link added' : 'Link removed');
 }
+
+// --- the styling bar ------------------------------------------------------
+// ONE bar for the whole editor, at the top, like a word processor's, instead
+// of one per section. It acts on whichever paragraph you are in and the words
+// you have selected there; `active` records which box that is, set on focus.
+let active = null;
+
+function buildToolbar() {
+  const PALETTE = ['#ffffff', '#434343', '#4a86e8', '#bf9000', '#ff0000'];
+  const SIZES = [
+    ['', 'size...'], ['10.6667pt', '10.7'], ['12pt', '12'],
+    ['14pt', '14 (body)'], ['18pt', '18'], ['24pt', '24'],
+    ['32pt', '32'], ['40pt', '40'],
+  ];
+
+  const tb = document.createElement('div');
+  tb.className = 'tb';
+  const sep = () => { const d = document.createElement('div'); d.className = 'tbsep'; return d; };
+
+  // says what the bar will act on, so it is never a mystery
+  const where = document.createElement('span');
+  where.className = 'tblabel';
+  where.textContent = 'style';
+  tb.appendChild(where);
+  setInterval(() => {
+    where.textContent = active && active.block
+      ? `${(active.block.tag || 'text')} ${active.block.id}`
+      : 'style';
+  }, 400);
+
+  const activeBox = () => {
+    if (!active) { toast('Click into a paragraph first, then style it', true); return null; }
+    return active;
+  };
+
+  const apply = (prop, value) => {
+    const a = activeBox();
+    if (a) styleBlock(a.file, a.sec, a.block, a.box, prop, value, a.range);
+  };
+
+  // What the selection covers, in the block's own text. The remembered range
+  // is used first: pressing a control moves the selection before the handler
+  // runs, so a live read there would style the wrong words.
+  const covered = () => {
+    if (!active) return null;
+    const parts = partsFromBox(active.box, (active.sec && active.sec.spanClass) || 'C9DxTc');
+    const whole = parts.reduce((n, p) => n + (p.text || '').length, 0);
+    const live = active.range || boxSelection(active.box);
+    return { parts, whole, range: live || { start: 0, end: whole } };
+  };
+
+  PALETTE.forEach(c => {
+    const b = document.createElement('button');
+    b.className = 'pal';
+    b.style.background = c;
+    b.title = 'Colour ' + c;
+    b.onclick = () => apply('color', c);
+    tb.appendChild(b);
+  });
+
+  const custom = document.createElement('input');
+  custom.type = 'color';
+  custom.className = 'pal';
+  custom.value = '#ffffff';
+  custom.title = 'Custom colour';
+  custom.onchange = () => apply('color', custom.value);
+  tb.appendChild(custom);
+
+  const auto = document.createElement('button');
+  auto.className = 'tiny';
+  auto.textContent = 'auto';
+  auto.title = 'Clear the colour so the text inherits the page default';
+  auto.onclick = () => apply('color', '');
+  tb.appendChild(auto);
+
+  tb.appendChild(sep());
+
+  // The URL box is separate from the words, so the flow is: select the words,
+  // paste a URL, press link.
+  const linkUrl = document.createElement('input');
+  linkUrl.type = 'url';
+  linkUrl.className = 'linkurl';
+  linkUrl.placeholder = 'link url';
+  linkUrl.title = 'The address to link the selected words to';
+  tb.appendChild(linkUrl);
+
+  const linkBtn = document.createElement('button');
+  linkBtn.className = 'tiny';
+  linkBtn.textContent = 'link';
+  linkBtn.title = 'Make the selected words a link (opens in a new tab)';
+  linkBtn.onclick = () => {
+    const a = activeBox(); if (!a) return;
+    const url = (linkUrl.value || '').trim();
+    if (!url) { toast('Paste a URL in the link box first', true); return; }
+    linkBlock(a.file, a.sec, a.block, a.box, url, a.range);
+  };
+  tb.appendChild(linkBtn);
+
+  const unlinkBtn = document.createElement('button');
+  unlinkBtn.className = 'tiny';
+  unlinkBtn.textContent = 'unlink';
+  unlinkBtn.title = 'Remove the link from the selected words';
+  unlinkBtn.onclick = () => {
+    const a = activeBox(); if (!a) return;
+    linkBlock(a.file, a.sec, a.block, a.box, '', a.range);
+  };
+  tb.appendChild(unlinkBtn);
+
+  tb.appendChild(sep());
+
+  const boldBtn = document.createElement('button');
+  boldBtn.className = 'tiny';
+  boldBtn.textContent = 'B';
+  boldBtn.style.fontWeight = '700';
+  boldBtn.title = 'Bold the selected words (click again to unbold)';
+  boldBtn.onclick = () => {
+    const c = covered(); if (!c) return;
+    // A toggle, like any rich text editor: if everything the selection covers
+    // is already bold, this click removes it instead.
+    let at = 0, allBold = true, touched = 0;
+    for (const p of c.parts) {
+      const a2 = Math.max(c.range.start - at, 0);
+      const b2 = Math.min(c.range.end - at, (p.text || '').length);
+      if (a2 < b2) {
+        touched++;
+        if (!/font-weight:\s*(700|bold)/i.test(p.style || '')) allBold = false;
+      }
+      at += (p.text || '').length;
+    }
+    apply('font-weight', (touched && allBold) ? '' : '700');
+  };
+  tb.appendChild(boldBtn);
+
+  tb.appendChild(sep());
+
+  const sizeSel = document.createElement('select');
+  sizeSel.title = 'Text size for the selected words (or the whole paragraph)';
+  SIZES.forEach(([value, text]) => {
+    const o = document.createElement('option');
+    o.value = value;
+    o.textContent = text;
+    sizeSel.appendChild(o);
+  });
+  sizeSel.onchange = () => apply('font-size', sizeSel.value);
+  tb.appendChild(sizeSel);
+
+  const hint = document.createElement('span');
+  hint.className = 'tbhint';
+  hint.textContent = 'select words, then style \u00b7 Enter = new line';
+  tb.appendChild(hint);
+
+  // Keep the paragraph's focus and selection when a control is pressed. Without
+  // this the mousedown blurs the box, the selection is lost, and a colour lands
+  // on the whole paragraph instead of the words you picked. The colour picker
+  // and the size list need real mouse events, so they are let through.
+  tb.addEventListener('mousedown', e => {
+    if (e.target.closest('select, input')) return;
+    e.preventDefault();
+  });
+  return tb;
+}
+
+// The bar belongs to the chrome, not to a section, so it is built once.
+(function mountToolbar() {
+  const mount = () => {
+    const host = document.getElementById('topbar');
+    if (host) host.appendChild(buildToolbar());
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
+  else mount();
+})();
 
 async function styleBlock(file, sec, blk, box, prop, value, range) {
   const parts = partsFromBox(box, sec.spanClass || 'C9DxTc');
