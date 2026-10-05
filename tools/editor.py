@@ -506,6 +506,7 @@ TEMPLATE_LABELS = {
     "spacer": "Spacer",
     "image": "Image",
     "image-text": "Image + text",
+    "free": "Free position",
 }
 
 
@@ -517,6 +518,8 @@ def template_list() -> list:
         {"file": f.name,
          "label": TEMPLATE_LABELS.get(f.stem, f.stem.replace("-", " ").title())}
         for f in sorted(TEMPLATES.glob("*.html"))
+        # nav-item.html is the donor for new nav entries, not an element type
+        if f.stem not in ("nav-item",)
     ]
 
 
