@@ -144,6 +144,14 @@
     border-radius:5px;padding:3px 6px;font-size:12px;
   }
   .tb .focusnote{font-size:11px;color:var(--warn)}
+  .tb input.linkurl{
+    width:130px;background:#0b0e12;color:var(--text);
+    border:1px solid var(--border-2);border-radius:5px;
+    padding:3px 6px;font-size:12px;
+  }
+  .tb input.linkurl:focus{border-color:var(--accent);outline:none}
+  .blockbox a{color:inherit}
+  .blockbox a[href]{text-decoration:underline}
 
   /* One editable box per paragraph. Styling shows here as you set it, so you
      can see what is building what while you write. */
@@ -613,6 +621,37 @@ function renderSection(file, sec, i, total) {
     };
     tb.appendChild(clearColour);
 
+    // Link controls. The URL box is separate from the words, so the flow is:
+    // select the words, paste a URL, press link.
+    const linkUrl = document.createElement('input');
+    linkUrl.type = 'url';
+    linkUrl.className = 'linkurl';
+    linkUrl.placeholder = 'link url';
+    linkUrl.title = 'The address to link the selected words to';
+    tb.appendChild(linkUrl);
+
+    const linkBtn = document.createElement('button');
+    linkBtn.className = 'tiny';
+    linkBtn.textContent = 'link';
+    linkBtn.title = 'Make the selected words a link (opens in a new tab)';
+    linkBtn.onclick = () => {
+      const a = activeBox(); if (!a) return;
+      const url = (linkUrl.value || '').trim();
+      if (!url) { toast('Paste a URL in the link box first', true); return; }
+      linkBlock(file, sec, a.block, a.box, url, a.range);
+    };
+    tb.appendChild(linkBtn);
+
+    const unlinkBtn = document.createElement('button');
+    unlinkBtn.className = 'tiny';
+    unlinkBtn.textContent = 'unlink';
+    unlinkBtn.title = 'Remove the link from the selected words';
+    unlinkBtn.onclick = () => {
+      const a = activeBox(); if (!a) return;
+      linkBlock(file, sec, a.block, a.box, '', a.range);
+    };
+    tb.appendChild(unlinkBtn);
+
     tb.appendChild(sep());
 
     const boldBtn = document.createElement('button');
@@ -681,12 +720,18 @@ function renderSection(file, sec, i, total) {
       : (sec.runs || []).map(r => ({ id: 'r' + r.i, tag: 'text', runs: [r.i] }));
 
     blocks.forEach(blk => {
-      const runs = (blk.runs || []).map(i => sec.runs[i]).filter(Boolean);
+      // Skip text that belongs to a button or other link container: it is not
+      // paragraph text, and rewriting it through set_block would flatten the
+      // button's own structure and break it.
+      const runs = (blk.runs || [])
+        .map(i => sec.runs[i])
+        .filter(r => r && r.editable !== false);
       if (!runs.length) return;
       const parts = runs.map(r => ({
         text: r.raw,
         style: r.css || '',
         class: r.class || spanClass,
+        href: r.href || '',
       }));
 
       const wrap = document.createElement('div');
@@ -868,25 +913,42 @@ function partsToHtml(parts) {
   return parts.map(p => {
     const text = escHtml(p.text || '').replace(/\n/g, '<br>');
     const style = (p.style || '').trim();
-    if (!style) return text;
     const cls = escHtml(p.class || 'C9DxTc');
-    return `<span class="${cls}" style="${escHtml(style)}">${text}</span>`;
+    const inner = style ? `<span class="${cls}" style="${escHtml(style)}">${text}</span>` : text;
+    // A part with an href is a real link; the link colour and underline ride in
+    // its style, set by the Link button.
+    if ((p.href || '').trim()) {
+      return `<a href="${escHtml(p.href.trim())}" target="_blank" rel="noopener noreferrer">${inner}</a>`;
+    }
+    return inner;
   }).join('');
 }
 
-// Read the box back as parts: bare text with no styling, spans with their own.
+// Read the box back as parts: bare text with no styling, spans with their own,
+// and links with their href.
 function partsFromBox(box, fallbackClass) {
   const parts = [];
   box.childNodes.forEach(n => {
     if (n.nodeType === 3) {
       if (n.nodeValue) parts.push({ text: n.nodeValue, style: '', class: fallbackClass });
-    } else if (n.nodeType === 1) {
+      return;
+    }
+    if (n.nodeType !== 1) return;
+    if (n.nodeName === 'A') {
+      const styled = n.querySelector('span');
       parts.push({
         text: nodeText(n),
-        style: n.getAttribute('style') || '',
-        class: n.getAttribute('class') || fallbackClass,
+        style: (styled ? styled.getAttribute('style') : n.getAttribute('style')) || '',
+        class: (styled ? styled.getAttribute('class') : n.getAttribute('class')) || fallbackClass,
+        href: n.getAttribute('href') || '',
       });
+      return;
     }
+    parts.push({
+      text: nodeText(n),
+      style: n.getAttribute('style') || '',
+      class: n.getAttribute('class') || fallbackClass,
+    });
   });
   return parts;
 }
@@ -969,6 +1031,49 @@ function selectRange(box, start, end) {
     sel.removeAllRanges();
     sel.addRange(r);
   } catch (e) { /* box changed shape; leaving it unselected is fine */ }
+}
+
+// Turn [start, end) into a link (or, with an empty href, back into plain text).
+// Splits parts as needed so only the selected words are affected.
+function linkParts(parts, start, end, href) {
+  const out = [];
+  let at = 0;
+  for (const p of parts) {
+    const text = p.text || '';
+    const a = Math.max(start - at, 0);
+    const b = Math.min(end - at, text.length);
+    if (a >= b) {
+      out.push(p);
+    } else {
+      if (a > 0) out.push({ ...p, text: text.slice(0, a) });
+      const mid = { ...p, text: text.slice(a, b) };
+      if (href) {
+        mid.href = href;
+        // The site's own link blue, underlined, so it reads as clickable.
+        mid.style = setCss(setCss(mid.style, 'color', '#4a86e8'), 'text-decoration', 'underline');
+      } else {
+        delete mid.href;
+        mid.style = setCss(mid.style, 'text-decoration', '');
+      }
+      out.push(mid);
+      if (b < text.length) out.push({ ...p, text: text.slice(b) });
+    }
+    at += text.length;
+  }
+  return out;
+}
+
+async function linkBlock(file, sec, blk, box, href, range) {
+  const parts = partsFromBox(box, sec.spanClass || 'C9DxTc');
+  if (!parts.length) return;
+  const whole = parts.reduce((n, p) => n + (p.text || '').length, 0);
+  const use = range || boxSelection(box) || { start: 0, end: whole };
+  const next = linkParts(parts, use.start, use.end, href);
+  box.innerHTML = partsToHtml(next);
+  suppressRemember = true;
+  selectRange(box, use.start, use.end);
+  setTimeout(() => { suppressRemember = false; }, 0);
+  await saveBlock(file, sec, blk, box, href ? 'Link added' : 'Link removed');
 }
 
 async function styleBlock(file, sec, blk, box, prop, value, range) {

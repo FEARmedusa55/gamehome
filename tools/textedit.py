@@ -138,10 +138,12 @@ def group_runs(html: str):
 
 
 def render_parts(parts, span_class: str = "C9DxTc") -> str:
-    """Inner markup for a block, from [{text, style}] parts.
+    """Inner markup for a block, from [{text, style, href}] parts.
 
     Rebuilds spans rather than trusting any HTML the browser hands back, so a
     round trip through the editor cannot smuggle in new tags or attributes.
+    A part carrying `href` becomes a real link; the link colour and underline
+    travel in its style, set by the editor's Link button.
     """
     out = []
     for part in parts:
@@ -149,11 +151,20 @@ def render_parts(parts, span_class: str = "C9DxTc") -> str:
         style = str(part.get("style") or "").strip()
         if style and not style.endswith(";"):
             style += ";"
+        cls = str(part.get("class") or span_class)
         if style:
-            cls = str(part.get("class") or span_class)
-            out.append(f'<span class="{cls}" style="{style}">{text}</span>')
+            inner = f'<span class="{cls}" style="{style}">{text}</span>'
         else:
-            out.append(text)
+            inner = text
+        href = str(part.get("href") or "").strip()
+        if href:
+            # Escape the URL for an attribute, and stop the new tab handing the
+            # opener window over to the target page.
+            safe = (href.replace("&", "&amp;").replace('"', "&quot;")
+                        .replace("<", "&lt;").replace(">", "&gt;"))
+            out.append(f'<a href="{safe}" target="_blank" rel="noopener noreferrer">{inner}</a>')
+        else:
+            out.append(inner)
     return "".join(out)
 
 

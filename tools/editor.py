@@ -155,6 +155,33 @@ def section_info(folder: Path, name: str) -> dict:
     if at >= 0:
         open_tag = html[at:html.index(">", at) + 1]
 
+    # A run inside <a href> is a link. The editor has to know, or the next save
+    # would rebuild the box without the href and quietly delete the link.
+    #
+    # Only links INSIDE the run's own block count. The site's filled buttons are
+    # <div><a href><div>label</div></a></div>, so the <a> WRAPS the block — that
+    # is a button label, not inline text, and treating it as a link (or letting
+    # it be edited as a paragraph) would rewrite the button and break it.
+    link_spans = [(m.start(), m.end(), m.group(1))
+                  for m in re.finditer(r'<a\b[^>]*href="([^"]*)"[^>]*>.*?</a>', html, re.S)]
+    block_spans = textedit_mod.blocks(html)
+
+    def inline_href(pos: int) -> str:
+        inner = textedit_mod.block_of(block_spans, pos)
+        for start, end, url in link_spans:
+            if start <= pos < end:
+                # inside the block => a real inline link on its text
+                if any(b[2] == inner and b[0] <= start for b in block_spans):
+                    return url
+        return ""
+
+    def inside_button(pos: int) -> bool:
+        """Is this run text INSIDE a link container, rather than a paragraph?"""
+        for start, end, _url in link_spans:
+            if start <= pos < end and not inline_href(pos):
+                return True
+        return False
+
     runs = []
     for i, (match, tag, attrs, text) in enumerate(textedit_mod.text_runs(html)):
         colour = re.search(r'color:\s*([^;"]+)', attrs)
@@ -177,6 +204,11 @@ def section_info(folder: Path, name: str) -> dict:
             "color": colour.group(1).strip() if colour else "",
             "bold": weight.group(1).strip() in ("700", "bold") if weight else False,
             "size": size.group(1).strip() if size else "",
+            "href": inline_href(match.start()),
+            # False for text that belongs to a button or other link container.
+            # The editor shows those read-only: rewriting them through set_block
+            # would flatten the button's own structure.
+            "editable": not inside_button(match.start()),
         })
 
     # One editing box per block, not per run: styling part of a line splits a
