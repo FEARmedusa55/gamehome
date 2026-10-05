@@ -1193,6 +1193,29 @@ function buildToolbar() {
   hint.textContent = 'select words, then style \u00b7 Enter = new line';
   tb.appendChild(hint);
 
+  // --- the section this paragraph is in ------------------------------------
+  tb.appendChild(sep());
+
+  const dupBtn = document.createElement('button');
+  dupBtn.className = 'tiny';
+  dupBtn.textContent = 'duplicate';
+  dupBtn.title = 'Copy the whole section this paragraph is in';
+  dupBtn.onclick = () => {
+    const a = activeBox(); if (!a) return;
+    dup(a.file, a.sec);
+  };
+  tb.appendChild(dupBtn);
+
+  const delBtn = document.createElement('button');
+  delBtn.className = 'tiny danger';
+  delBtn.textContent = 'delete';
+  delBtn.title = 'Delete this paragraph\u2019s section (it goes to _trash, so it can be recovered)';
+  delBtn.onclick = () => {
+    const a = activeBox(); if (!a) return;
+    drop(a.file, a.sec);
+  };
+  tb.appendChild(delBtn);
+
   // --- Add element, in the bar with everything else ------------------------
   // It used to sit above the section list, rebuilt for every page. It adds to
   // the bottom of whichever page is open.
