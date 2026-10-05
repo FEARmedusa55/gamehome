@@ -36,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import content as content_mod     # noqa: E402
 import platforms as platforms_mod  # noqa: E402
 import sections as sections_mod    # noqa: E402
+import buttons as buttons_mod      # noqa: E402
 import textedit as textedit_mod    # noqa: E402
 
 HERE = Path(__file__).resolve().parent.parent
@@ -239,6 +240,10 @@ def section_info(folder: Path, name: str) -> dict:
         # The span class this page's text actually uses, so newly split spans
         # look like every other span around them.
         "spanClass": next((r["class"] for r in runs if r["class"]), "C9DxTc"),
+        # The filled link buttons in this section, if any. They are edited as a
+        # list rather than as text: a button is a widget, and rewriting its
+        # label as a paragraph would flatten it.
+        "buttons": buttons_mod.read_buttons(html),
         "images": images,
     }
 
@@ -544,6 +549,7 @@ def api_page(page_file: str) -> dict:
 ACTION_LABELS = {
     "set_text": "edit text",
     "set_block": "edit paragraph",
+    "set_buttons": "edit buttons",
     "set_style": "restyle text",
     "set_image": "swap image",
     "drop_section": "delete section",
@@ -627,6 +633,21 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
         span_class = payload.get("spanClass") or "C9DxTc"
         inner = textedit_mod.render_parts(parts, span_class=span_class)
         write(path, html[:c_start] + inner + html[c_end:])
+        return {"ok": True, "rebuilt": rebuild(page)}
+
+    if action == "set_buttons":
+        # Rewrite a section's buttons from a list: label, href, and optional
+        # per-button colour/size. Fewer entries removes the extras, more adds.
+        folder = ensure_staged(page)
+        path = folder / payload["section"]
+        html = read(path)
+        items = payload.get("buttons")
+        if not isinstance(items, list):
+            return {"ok": False, "error": "need a buttons list"}
+        new = buttons_mod.write_buttons(html, items)
+        if new == html:
+            return {"ok": False, "error": "no buttons found in that section"}
+        write(path, new)
         return {"ok": True, "rebuilt": rebuild(page)}
 
     if action == "set_text":

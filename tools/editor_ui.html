@@ -153,6 +153,27 @@
   .blockbox a{color:inherit}
   .blockbox a[href]{text-decoration:underline}
 
+  /* the button list: label, link, colour, size, order */
+  .btnpanel{
+    border:1px solid var(--border);border-radius:8px;padding:8px 10px;
+    margin-bottom:12px;background:var(--panel-2);
+  }
+  .btnrow{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+  .btnrow:last-of-type{margin-bottom:8px}
+  .btnrow input.btlabel{
+    flex:0 0 190px;background:#0b0e12;color:var(--text);border:1px solid var(--border-2);
+    border-radius:5px;padding:4px 7px;font-size:12.5px;
+  }
+  .btnrow input.bthref{
+    flex:1 1 auto;min-width:120px;background:#0b0e12;color:var(--muted);
+    border:1px solid var(--border-2);border-radius:5px;padding:4px 7px;font-size:12px;
+  }
+  .btnrow input.btlabel:focus,.btnrow input.bthref:focus{border-color:var(--accent);outline:none}
+  .btnrow select.btsize{
+    background:#0b0e12;color:var(--text);border:1px solid var(--border-2);
+    border-radius:5px;padding:3px 5px;font-size:12px;
+  }
+
   /* One editable box per paragraph. Styling shows here as you set it, so you
      can see what is building what while you write. */
   .blockbox{
@@ -544,8 +565,124 @@ function renderSection(file, sec, i, total) {
   const body = document.createElement('div');
   body.className = 'body';
 
+  // --- the filled link buttons, if this section has any -------------------
+  // Edited as a list, not as text: a button is a widget, so its label, link,
+  // order, colour and size are fields rather than an editable paragraph.
+  const buttons = sec.buttons || [];
+  if (buttons.length) {
+    const panel = document.createElement('div');
+    panel.className = 'btnpanel';
+
+    const read = () => [...panel.querySelectorAll('.btnrow')].map(r => ({
+      label: r.querySelector('.btlabel').value,
+      href: r.querySelector('.bthref').value,
+      background: r.querySelector('.btcolour').value,
+      size: r.querySelector('.btsize').value,
+    }));
+
+    const save = async (msg) => {
+      try {
+        await post({ action: 'set_buttons', file, section: sec.file, buttons: read() });
+        toast(msg);
+        reloadPreview();
+      } catch (e) { toast(e.message, true); }
+    };
+
+    const wire = (row, idx) => {
+      row.querySelector('.btup').onclick = () => {
+        const rows = [...panel.querySelectorAll('.btnrow')];
+        rows[idx - 1].before(rows[idx]);
+        save('Button moved');
+      };
+      row.querySelector('.btdown').onclick = () => {
+        const rows = [...panel.querySelectorAll('.btnrow')];
+        rows[idx + 1].after(rows[idx]);
+        save('Button moved');
+      };
+      row.querySelector('.btdel').onclick = () => { row.remove(); save('Button removed'); };
+      ['btlabel', 'bthref'].forEach(c =>
+        row.querySelector('.' + c).addEventListener('change', () => save('Button updated')));
+      row.querySelector('.btcolour').addEventListener('change', () => save('Button recoloured'));
+      row.querySelector('.btsize').addEventListener('change', () => save('Button resized'));
+    };
+
+    buttons.forEach((b, idx) => {
+      const row = document.createElement('div');
+      row.className = 'btnrow';
+
+      const up = document.createElement('button');
+      up.className = 'tiny btup'; up.textContent = '\u2191';
+      up.title = 'Move this button earlier';
+      up.disabled = idx === 0;
+
+      const down = document.createElement('button');
+      down.className = 'tiny btdown'; down.textContent = '\u2193';
+      down.title = 'Move this button later';
+      down.disabled = idx === buttons.length - 1;
+
+      const label = document.createElement('input');
+      label.className = 'btlabel';
+      label.value = b.label || '';
+      label.placeholder = 'label';
+      label.title = 'The text on the button';
+
+      const href = document.createElement('input');
+      href.className = 'bthref';
+      href.value = b.href || '';
+      href.placeholder = 'link url';
+      href.title = 'Where the button goes';
+
+      const colour = document.createElement('input');
+      colour.type = 'color';
+      colour.className = 'btcolour pal';
+      colour.title = 'Button colour';
+      colour.value = /^#[0-9a-f]{6}$/i.test(b.background || '') ? b.background : '#3c44cc';
+
+      const size = document.createElement('select');
+      size.className = 'btsize';
+      size.title = 'Button text size';
+      [['', 'size'], ['9pt', '9'], ['10pt', '10'], ['12pt', '12'],
+       ['14pt', '14'], ['18pt', '18']].forEach(([v, t]) => {
+        const o = document.createElement('option'); o.value = v; o.textContent = t; size.appendChild(o);
+      });
+      size.value = b.size || '';
+
+      const del = document.createElement('button');
+      del.className = 'tiny danger btdel'; del.textContent = '\u2212';
+      del.title = 'Remove this button';
+
+      row.append(up, down, label, href, colour, size, del);
+      wire(row, idx);
+      panel.appendChild(row);
+    });
+
+    const add = document.createElement('button');
+    add.className = 'tiny';
+    add.textContent = '+ button';
+    add.title = 'Add another button, copied from the last one';
+    add.onclick = () => {
+      const rows = [...panel.querySelectorAll('.btnrow')];
+      if (!rows.length) return;
+      const fresh = rows[rows.length - 1].cloneNode(true);
+      panel.insertBefore(fresh, add);
+      wire(fresh, rows.length);
+      save('Button added');
+    };
+    panel.appendChild(add);
+
+    body.appendChild(panel);
+  }
+
+
+
   if (!sec.runs || !sec.runs.length) {
-    body.innerHTML = '<p class="empty">No editable text in this section (it is an image or decoration block).</p>';
+    // append rather than replace: body.innerHTML would wipe the button panel
+    if (!buttons.length) {
+      const none = document.createElement('p');
+      none.className = 'empty';
+      none.textContent = 'No editable text in this section (it is an image or decoration block).';
+      body.appendChild(none);
+    }
   } else {
     // --- one styling toolbar, and one editable box per paragraph --------
     // Select the words, click a colour / B / size: it applies to just those
