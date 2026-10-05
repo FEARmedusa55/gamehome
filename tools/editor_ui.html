@@ -516,38 +516,9 @@ function renderPage(data) {
     (r.children || []).some(c => c.href === data.file));
   h.textContent = homeGroup ? `${homeGroup.label} \u00b7 ${data.title}` : data.title;
   const sub = document.createElement('small');
-  sub.textContent = `${data.sections.length} sections \u00b7 edit text below, then Save`;
+  sub.textContent = `${data.sections.length} sections \u00b7 changes save as you type`;
   h.appendChild(sub);
   ed.appendChild(h);
-
-  const bar = document.createElement('div');
-  bar.style.cssText = 'display:flex;gap:8px;margin:10px 0 2px;position:relative';
-
-  const addBtn = document.createElement('button');
-  addBtn.textContent = '+ Add element \u25be';
-  addBtn.title = 'Insert a new element at the bottom of this page';
-  const menu = document.createElement('div');
-  menu.className = 'elmenu';
-  menu.hidden = true;
-
-  const templates = STATE.templates || [];
-  if (templates.length) {
-    for (const t of templates) {
-      const item = document.createElement('button');
-      item.textContent = t.label;
-      item.onclick = () => { menu.hidden = true; addElement(data.file, t.file, t.label); };
-      menu.appendChild(item);
-    }
-  } else {
-    const item = document.createElement('button');
-    item.textContent = 'no templates \u2014 run make_templates.py';
-    item.disabled = true;
-    menu.appendChild(item);
-  }
-
-  addBtn.onclick = (ev) => { ev.stopPropagation(); menu.hidden = !menu.hidden; };
-  bar.append(addBtn, menu);
-  ed.appendChild(bar);
 
   data.sections.forEach((sec, i) => ed.appendChild(renderSection(data.file, sec, i, data.sections.length)));
 }
@@ -749,7 +720,19 @@ function renderSection(file, sec, i, total) {
         if (r && active && active.box === box) active.range = r;
       };
       ['keyup', 'mouseup', 'select'].forEach(ev => box.addEventListener(ev, rememberSel));
-      box.onblur = () => saveBlock(file, sec, blk, box);
+      // Auto-save: write the paragraph back shortly after you stop typing, so
+      // there is nothing to remember to press. The blur save stays as a
+      // backstop, and cancels any pending timer so it cannot fire twice.
+      let typing = null;
+      box.addEventListener('input', () => {
+        status('editing\u2026');
+        clearTimeout(typing);
+        typing = setTimeout(() => saveBlock(file, sec, blk, box, null, true), 900);
+      });
+      box.onblur = () => {
+        clearTimeout(typing);
+        saveBlock(file, sec, blk, box);
+      };
       // Enter adds a line inside the paragraph rather than inventing a new
       // block: that keeps one paragraph as one box.
       box.addEventListener('keydown', e => {
@@ -1210,6 +1193,56 @@ function buildToolbar() {
   hint.textContent = 'select words, then style \u00b7 Enter = new line';
   tb.appendChild(hint);
 
+  // --- Add element, in the bar with everything else ------------------------
+  // It used to sit above the section list, rebuilt for every page. It adds to
+  // the bottom of whichever page is open.
+  tb.appendChild(sep());
+
+  const addWrap = document.createElement('div');
+  addWrap.style.cssText = 'position:relative;display:inline-flex';
+
+  const addBtn = document.createElement('button');
+  addBtn.className = 'tiny';
+  addBtn.textContent = '+ element \u25be';
+  addBtn.title = 'Add an element to the bottom of the page you are editing';
+
+  const menu = document.createElement('div');
+  menu.className = 'elmenu';
+  menu.hidden = true;
+
+  // Filled when the menu opens, not at mount: the bar is built before the
+  // page state arrives, so STATE.templates is still empty at that point and
+  // the menu would permanently say "no templates".
+  const fillMenu = () => {
+    menu.innerHTML = '';
+    const templates = STATE.templates || [];
+    if (templates.length) {
+      for (const t of templates) {
+        const item = document.createElement('button');
+        item.textContent = t.label;
+        item.onclick = () => {
+          menu.hidden = true;
+          if (!CURRENT) { toast('Pick a page on the left first', true); return; }
+          addElement(CURRENT, t.file, t.label);
+        };
+        menu.appendChild(item);
+      }
+    } else {
+      const item = document.createElement('button');
+      item.textContent = 'no templates \u2014 run make_templates.py';
+      item.disabled = true;
+      menu.appendChild(item);
+    }
+  };
+
+  addBtn.onclick = (ev) => {
+    ev.stopPropagation();
+    menu.hidden = !menu.hidden;
+    if (!menu.hidden) fillMenu();
+  };
+  addWrap.append(addBtn, menu);
+  tb.appendChild(addWrap);
+
   // Keep the paragraph's focus and selection when a control is pressed. Without
   // this the mousedown blurs the box, the selection is lost, and a colour lands
   // on the whole paragraph instead of the words you picked. The colour picker
@@ -1256,15 +1289,20 @@ async function styleBlock(file, sec, blk, box, prop, value, range) {
                     : 'Style updated');
 }
 
-async function saveBlock(file, sec, blk, box, message) {
+async function saveBlock(file, sec, blk, box, message, quiet) {
   const parts = partsFromBox(box, sec.spanClass || 'C9DxTc');
   if (!parts.length) return;
   try {
+    // A quiet save is the one that happens while you type: it says so in the
+    // status line but does not reload the preview, which would flash the pane
+    // on every pause in typing.
+    status(quiet ? 'saving\u2026' : '');
     await post({ action: 'set_block', file, section: sec.file, block: blk.id,
                  spanClass: sec.spanClass, parts });
     if (message) toast(message);
-    reloadPreview();
-  } catch (e) { toast(e.message, true); }
+    status('saved ' + new Date().toLocaleTimeString());
+    if (!quiet) reloadPreview();
+  } catch (e) { toast(e.message, true); status('save failed'); }
 }
 
 async function styleRun(file, sec, run, input, changes) {
