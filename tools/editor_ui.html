@@ -14,7 +14,10 @@
   }
   *,*::before,*::after{box-sizing:border-box}
   html,body{height:100%}
-  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;
+       /* a column so the panes take exactly the space left under the header and
+          the bar, whatever height those are — a hard-coded calc drifts */
+       height:100vh;display:flex;flex-direction:column;overflow:hidden}
 
   header{
     display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--panel);
@@ -36,12 +39,17 @@
   button.danger:hover{color:var(--danger);border-color:var(--danger)}
   button:disabled{opacity:.45;cursor:default}
 
-  .layout{display:grid;grid-template-columns:230px minmax(420px,1fr) minmax(340px,1fr);height:calc(100vh - 49px)}
-  .layout.no-preview{grid-template-columns:230px 1fr}
+  /* The first column is 250px on purpose: that is the width of the site's own
+     nav sidebar (.JzO0Vc{width:250px}). Matching it means an element's position
+     in the preview lines up with its position beside the editor's own sidebar,
+     which is what makes dragged objects translate. Do not "tidy" this number. */
+  .layout{display:grid;grid-template-columns:250px minmax(420px,1fr) minmax(340px,1fr);flex:1;min-height:0}
+  .layout.no-preview{grid-template-columns:250px 1fr}
+  .layout > *{min-height:0}
 
   /* full screen: preview only, filling the window */
   body.fs .sitebar{display:none}
-  body.fs .layout{grid-template-columns:1fr;height:100vh}
+  body.fs .layout{grid-template-columns:1fr}
   body.fs aside,
   body.fs main{display:none}
   body.fs .preview{border-left:0}
