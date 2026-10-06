@@ -1,0 +1,11 @@
+{
+  "page": "others-wiiu-games.html",
+  "source_sha1": "d30ece611ac188bc4149ae85479e6672d95ddc45",
+  "source_bytes": 138774,
+  "head": "_head.html",
+  "tail": "_tail.html",
+  "sections": [
+    "00-new-section-heading-write-your.html",
+    "01-new-section.html"
+  ]
+}
