@@ -43,7 +43,11 @@
      nav sidebar (.JzO0Vc{width:250px}). Matching it means an element's position
      in the preview lines up with its position beside the editor's own sidebar,
      which is what makes dragged objects translate. Do not "tidy" this number. */
-  .layout{display:grid;grid-template-columns:250px minmax(420px,1fr) minmax(340px,1fr);flex:1;min-height:0}
+  /* The preview is the way in now, so the cards panel is out of the layout.
+     Hidden rather than deleted from the DOM: renderPage writes into #editor, so
+     removing the node would crash it for no visible gain. */
+  #editor{display:none}
+  .layout{display:grid;grid-template-columns:250px 1fr;flex:1;min-height:0}
   .layout.no-preview{grid-template-columns:250px 1fr}
   .layout > *{min-height:0}
 
@@ -1105,6 +1109,36 @@ function buildToolbar() {
   const where = document.createElement('span');
   where.className = 'tblabel';
   where.textContent = 'style';
+
+  // A button clicked in the preview: its label and link, edited as fields
+  // rather than as text, because a button is a widget. Hidden until one is
+  // clicked.
+  const btnRow = document.createElement('span');
+  btnRow.id = 'btnRow';
+  btnRow.hidden = true;
+  btnRow.style.cssText = 'display:inline-flex;gap:6px;align-items:center';
+
+  const btnCap = document.createElement('span');
+  btnCap.className = 'tblabel';
+  btnCap.textContent = 'button';
+
+  const btnLabel = document.createElement('input');
+  btnLabel.className = 'btlabel';
+  btnLabel.placeholder = 'button label';
+  btnLabel.title = 'The text on the button';
+
+  const btnHref = document.createElement('input');
+  btnHref.className = 'bthref';
+  btnHref.placeholder = 'button link';
+  btnHref.title = 'Where the button goes';
+
+  btnRow.append(btnCap, btnLabel, btnHref);
+  ['change'].forEach(ev => btnLabel.addEventListener(ev, () => saveButtonField()));
+  btnHref.addEventListener('change', () => saveButtonField());
+  btnLabelInput = btnLabel;
+  btnHrefInput = btnHref;
+
+  tb.appendChild(btnRow);
   tb.appendChild(where);
   setInterval(() => {
     where.textContent = active && active.block
@@ -1236,6 +1270,28 @@ function buildToolbar() {
   // --- the section this paragraph is in ------------------------------------
   tb.appendChild(sep());
 
+  // Put them in order too: the cards had up/down and the bar should not be a
+  // step backwards from them.
+  const upBtn = document.createElement('button');
+  upBtn.className = 'tiny';
+  upBtn.textContent = '\u2191';
+  upBtn.title = 'Move this paragraph\u2019s section earlier on the page';
+  upBtn.onclick = () => {
+    const a = activeBox(); if (!a) return;
+    move(a.file, a.sec, 'up');
+  };
+  tb.appendChild(upBtn);
+
+  const downBtn = document.createElement('button');
+  downBtn.className = 'tiny';
+  downBtn.textContent = '\u2193';
+  downBtn.title = 'Move this paragraph\u2019s section later on the page';
+  downBtn.onclick = () => {
+    const a = activeBox(); if (!a) return;
+    move(a.file, a.sec, 'down');
+  };
+  tb.appendChild(downBtn);
+
   const dupBtn = document.createElement('button');
   dupBtn.className = 'tiny';
   dupBtn.textContent = 'duplicate';
@@ -1324,6 +1380,85 @@ function buildToolbar() {
 // back.
 let CURRENT_DATA = null;
 
+// The button clicked in the preview, and the two fields that edit it. The row
+// lives in the bar, built once, so these are filled in from here.
+let BTN = null;
+let btnLabelInput = null;
+let btnHrefInput = null;
+
+// A file input, created once, used for whichever image was clicked.
+let imgFile = null;
+let IMG = null;
+
+function showImageSwap(target) {
+  const m = /^(\d+):(\d+)$/.exec(String(target || ''));
+  if (!m || !CURRENT_DATA) return;
+  const sec = (CURRENT_DATA.sections || [])[Number(m[1])];
+  const img = sec && (sec.images || [])[Number(m[2])];
+  if (!img) return;
+  IMG = { sec, img };
+  if (!imgFile) {
+    imgFile = document.createElement('input');
+    imgFile.type = 'file';
+    imgFile.accept = 'image/*';
+    imgFile.hidden = true;
+    imgFile.onchange = () => swapPreviewImage(imgFile.files[0]);
+    document.body.appendChild(imgFile);
+  }
+  status('Pick an image to swap in');
+  imgFile.value = '';
+  imgFile.click();
+}
+
+async function swapPreviewImage(blob) {
+  if (!blob || !IMG) return;
+  if (!/^image\//.test(blob.type)) { toast('That file is not an image', true); return; }
+  try {
+    const data = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('could not read that file'));
+      reader.readAsDataURL(blob);
+    });
+    const up = await post({ action: 'upload_image', name: blob.name, data });
+    await post({ action: 'set_image', file: CURRENT, section: IMG.sec.file,
+                 index: IMG.img.i, src: up.src });
+    toast('Image swapped');
+    status('saved ' + new Date().toLocaleTimeString());
+    reloadPreview();
+  } catch (e) { toast(e.message, true); status('swap failed'); }
+}
+
+function showButtonFields(target) {
+  const m = /^(\d+):(\d+)$/.exec(String(target || ''));
+  const row = document.getElementById('btnRow');
+  if (!m || !CURRENT_DATA || !row) { if (row) row.hidden = true; return; }
+  const sec = (CURRENT_DATA.sections || [])[Number(m[1])];
+  const btn = sec && (sec.buttons || [])[Number(m[2])];
+  if (!btn) { row.hidden = true; return; }
+  BTN = { k: Number(m[2]), sec };
+  row.hidden = false;
+  if (btnLabelInput) btnLabelInput.value = btn.label || '';
+  if (btnHrefInput) btnHrefInput.value = btn.href || '';
+}
+
+async function saveButtonField() {
+  if (!BTN || !btnLabelInput || !btnHrefInput) return;
+  // The whole list goes back: the server understands buttons as a list, and the
+  // untouched entries carry their styling through unchanged.
+  const list = (BTN.sec.buttons || []).map((b, i) => i === BTN.k
+    ? { label: btnLabelInput.value, href: btnHrefInput.value,
+        background: b.background, colour: b.colour, size: b.size }
+    : { label: b.label, href: b.href,
+        background: b.background, colour: b.colour, size: b.size });
+  try {
+    status('saving\u2026');
+    await post({ action: 'set_buttons', file: CURRENT, section: BTN.sec.file, buttons: list });
+    status('saved ' + new Date().toLocaleTimeString());
+    reloadPreview();
+  } catch (e) { toast(e.message, true); status('save failed'); }
+}
+
 // The blocks the editor actually offers for a section, in the same order the
 // server numbered them. Must stay in step with both the card filter and the
 // annotation, or an edit lands on a neighbouring paragraph.
@@ -1369,9 +1504,11 @@ async function savePostedBlock(hit, html) {
 }
 
 window.addEventListener('message', ev => {
-  const d = ev.data || {};
-  if (!d.mm) return;
-  const hit = blockFromTarget(d.target);
+const d = ev.data || {};
+if (!d.mm) return;
+if (d.mm === 'button') { showButtonFields(d.target); return; }
+if (d.mm === 'image') { showImageSwap(d.target); return; }
+const hit = blockFromTarget(d.target);
   if (!hit) return;
   const box = previewEl(d.target);
 

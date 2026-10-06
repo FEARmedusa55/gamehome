@@ -57,17 +57,31 @@ def _widget_spans(html: str) -> list[tuple[int, int]]:
     return spans
 
 
+def _prop(css: str, name: str) -> str:
+    m = re.search(r"(?:^|;)\s*" + re.escape(name) + r"\s*:\s*([^;\"]+)", css or "")
+    return m.group(1).strip() if m else ""
+
+
 def read_buttons(html: str) -> list[dict]:
-    """[{i, label, href}] for each button, in document order."""
+    """[{i, label, href, background, colour, size}] for each button, in order.
+
+    The styling comes back too, so a round trip through this list — which is how
+    a label edit is saved — does not quietly strip a button's colour or size.
+    """
     out = []
     for i, (start, end) in enumerate(_widget_spans(html)):
         widget = html[start:end]
         lab = LABEL.search(widget)
         href = HREF.search(widget)
+        style = re.search(r'style="([^"]*)"', widget[:400])
+        css = style.group(1) if style else ""
         out.append({
             "i": i,
             "label": re.sub(r"<[^>]+>", "", lab.group(1)).strip() if lab else "",
             "href": href.group(2) if href else "",
+            "background": _prop(css, "background-color"),
+            "colour": _prop(css, "color"),
+            "size": _prop(css, "font-size"),
         })
     return out
 

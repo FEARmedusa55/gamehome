@@ -101,6 +101,30 @@ INJECT = """
     }
   });
 
+  // Buttons are widgets, not paragraphs, so they get their own marker rather
+  // than being offered as text. Numbering is plain document order inside each
+  // section, which is the order the editor's button list uses too — no text
+  // matching needed here, unlike blocks.
+  //
+  // Selected by tag, not by ".yaqOzd": the class on these sections carries an
+  // invisible character after it, so the class selector matches nothing even
+  // though the element is right there. The server's regex tolerates it; CSS
+  // does not.
+  [...document.querySelectorAll('section')].forEach(function (s, si) {
+    [...s.querySelectorAll('div.QmpIrf')].forEach(function (w, k) {
+      w.setAttribute('data-mmb-btn', si + ':' + k);
+      w.style.cursor = 'pointer';
+    });
+    // Images get a marker too, so clicking one can offer a swap. Numbered in
+    // document order, which is the order the editor lists them in.
+    [...s.querySelectorAll('img')].forEach(function (im, k) {
+      im.setAttribute('data-mmb-img', si + ':' + k);
+      im.style.cursor = 'pointer';
+    });
+  });
+  var buttonsTagged = document.querySelectorAll('[data-mmb-btn]').length;
+  var imagesTagged = document.querySelectorAll('[data-mmb-img]').length;
+
   var box = null;
   var dirty = false;
 
@@ -135,6 +159,19 @@ INJECT = """
   });
 
   document.addEventListener('click', function (e) {
+    // A button or an image first: both are widgets edited as fields, not text.
+    var btn = e.target.closest && e.target.closest('[data-mmb-btn]');
+    if (btn) {
+      e.preventDefault();
+      send({ mm: 'button', target: btn.getAttribute('data-mmb-btn') });
+      return;
+    }
+    var im = e.target.closest && e.target.closest('[data-mmb-img]');
+    if (im) {
+      e.preventDefault();
+      send({ mm: 'image', target: im.getAttribute('data-mmb-img') });
+      return;
+    }
     var el = e.target.closest && e.target.closest('[data-mmb]');
     if (!el) return;
     // Let links inside a paragraph keep working when you hold a modifier.
@@ -217,7 +254,8 @@ INJECT = """
 
   // Tell the editor how many of the expected blocks we found, so it can tell
   // a complete map from a partial one.
-  send({ mm: 'ready', matched: matched, expected: TARGETS.length });
+  send({ mm: 'ready', matched: matched, expected: TARGETS.length,
+         buttons: buttonsTagged, images: imagesTagged });
 })();
 </script>
 """
