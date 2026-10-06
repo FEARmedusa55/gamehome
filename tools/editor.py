@@ -37,6 +37,7 @@ import content as content_mod     # noqa: E402
 import platforms as platforms_mod  # noqa: E402
 import sections as sections_mod    # noqa: E402
 import buttons as buttons_mod      # noqa: E402
+import preview_edit               # noqa: E402
 import textedit as textedit_mod    # noqa: E402
 
 HERE = Path(__file__).resolve().parent.parent
@@ -1053,7 +1054,34 @@ class Handler(BaseHTTPRequestHandler):
             return
         if target.is_file():
             ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
-            self._send(200, target.read_bytes(), ctype)
+            data = target.read_bytes()
+
+            # The preview asks for edit mode. Mark which staged section and block
+            # each editable element came from, and inject the small script that
+            # reports clicks and edits back. Done at serve time: the .html files
+            # on disk keep their original markup.
+            if ctype.startswith("text/html") and parse_qs(parsed.query).get("mm_edit"):
+                try:
+                    page = rel.replace("\\", "/")
+                    if page in site_pages():
+                        html = data.decode("utf-8")
+                        folder = CONTENT / Path(page).stem
+                        names = manifest_of(page)["sections"]
+                        # The blocks the editor offers, with the text it shows
+                        # for each. The page script finds the matching elements
+                        # by that text — no position arithmetic on either side.
+                        targets = preview_edit.targets(section_info, folder, names)
+                        html = preview_edit.inject(html, targets)
+                        data = html.encode("utf-8")
+                        print(f"  preview edit: {page} — {len(targets)} blocks to match")
+                    else:
+                        print(f"  preview edit: {page} is not a site page, serving plain")
+                except Exception as exc:                      # noqa: BLE001
+                    # Never break the preview over the marking: fall back to the
+                    # plain page and say why in the console.
+                    print(f"  preview edit failed for {rel}: {exc!r} — serving plain")
+
+            self._send(200, data, ctype)
         else:
             self._json({"error": "not found"}, 404)
 

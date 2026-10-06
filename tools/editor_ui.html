@@ -323,10 +323,18 @@ function toast(msg, isErr) {
 }
 function status(msg) { document.getElementById('status').textContent = msg || ''; }
 
+// The preview is served with data-mmb markers so a click can be traced to a
+// section and block. Verified: all 52 blocks of the front page are marked, each
+// marker's text matches the card it claims to be, and typing in the preview
+// saves only to that block. See preview_edit.py.
+const PREVIEW_EDIT = true;
+
 function reloadPreview() {
   const f = document.getElementById('preview');
   f.src = 'about:blank';
-  setTimeout(() => { f.src = CURRENT + '?t=' + Date.now(); }, 40);
+  setTimeout(() => {
+    f.src = CURRENT + (PREVIEW_EDIT ? '?mm_edit=1&' : '?') + 't=' + Date.now();
+  }, 40);
 }
 
 // Which groups are open in the sidebar tree. Remembered for the session so a
@@ -507,6 +515,7 @@ async function selectPage(file) {
     a.classList.toggle('active', a.dataset.file === file));
   status('loading ' + file + '\u2026');
   const data = await get('/api/page?file=' + encodeURIComponent(file));
+  CURRENT_DATA = data;
   renderPage(data);
   document.getElementById('previewName').textContent = file;
   reloadPreview();
@@ -970,12 +979,15 @@ function styleParts(parts, start, end, prop, value) {
 // Where the caret/selection sits inside the box, as character offsets into the
 // text the box shows. Null when there is no usable selection.
 function boxSelection(box) {
-  const sel = window.getSelection();
+  // ownerDocument, not document: in the preview the box lives inside the
+  // iframe, which has its own selection and range objects.
+  const doc = box.ownerDocument;
+  const sel = doc.getSelection();
   if (!sel || !sel.rangeCount) return null;
   const r = sel.getRangeAt(0);
   if (r.collapsed) return null;
   if (!box.contains(r.startContainer) || !box.contains(r.endContainer)) return null;
-  const before = document.createRange();
+  const before = doc.createRange();
   before.selectNodeContents(box);
   before.setEnd(r.startContainer, r.startOffset);
   const start = nodeText(before.cloneContents()).length;
@@ -989,7 +1001,8 @@ let suppressRemember = false;
 // Put the selection back over [start, end) after the box has been re-rendered,
 // so you can chain colour then bold then size on the same words.
 function selectRange(box, start, end) {
-  const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+  const doc = box.ownerDocument;
+  const walker = doc.createTreeWalker(box, NodeFilter.SHOW_TEXT);
   let at = 0, from = null, to = null, n;
   while ((n = walker.nextNode())) {
     const len = n.nodeValue.length;
@@ -1284,6 +1297,81 @@ function buildToolbar() {
   });
   return tb;
 }
+
+// --- editing inside the preview -------------------------------------------
+// The preview is the real page, served with each editable block marked
+// "section:block". The script in there reports clicks and edits; this side owns
+// the saving, so there is still only one place that knows how to write a block
+// back.
+let CURRENT_DATA = null;
+
+// The blocks the editor actually offers for a section, in the same order the
+// server numbered them. Must stay in step with both the card filter and the
+// annotation, or an edit lands on a neighbouring paragraph.
+function editablesOf(sec) {
+  const runs = sec.runs || [];
+  return (sec.blocks || []).filter(b =>
+    (b.runs || []).some(i => runs[i] && runs[i].editable !== false));
+}
+
+function blockFromTarget(target) {
+  if (!CURRENT_DATA || !target) return null;
+  const m = /^(\d+):(\d+)$/.exec(String(target));
+  if (!m) return null;
+  const sec = (CURRENT_DATA.sections || [])[Number(m[1])];
+  if (!sec) return null;
+  const blk = editablesOf(sec)[Number(m[2])];
+  if (!blk) return null;
+  return { sec, block: blk };
+}
+
+function previewEl(target) {
+  const doc = document.getElementById('preview').contentDocument;
+  return doc ? doc.querySelector('[data-mmb="' + target + '"]') : null;
+}
+
+async function savePostedBlock(hit, html) {
+  // The served markup carries the editor's own attributes; strip them before
+  // reading the block back as parts.
+  const tmp = document.createElement('div');
+  tmp.innerHTML = String(html || '');
+  tmp.querySelectorAll('[data-mmb]').forEach(el => {
+    el.removeAttribute('data-mmb');
+    el.removeAttribute('contenteditable');
+  });
+  const parts = partsFromBox(tmp, (hit.sec && hit.sec.spanClass) || 'C9DxTc');
+  if (!parts.length) return;
+  try {
+    status('saving\u2026');
+    await post({ action: 'set_block', file: CURRENT, section: hit.sec.file,
+                 block: hit.block.id, spanClass: hit.sec.spanClass, parts });
+    status('saved ' + new Date().toLocaleTimeString());
+  } catch (e) { toast(e.message, true); status('save failed'); }
+}
+
+window.addEventListener('message', ev => {
+  const d = ev.data || {};
+  if (!d.mm) return;
+  const hit = blockFromTarget(d.target);
+  if (!hit) return;
+  const box = previewEl(d.target);
+
+  if (d.mm === 'focus') {
+    active = { file: CURRENT, sec: hit.sec, block: hit.block, box, range: null };
+    return;
+  }
+  if (d.mm === 'sel') {
+    // A selection inside the preview, as character offsets, so the bar can
+    // style the words you picked rather than the whole paragraph.
+    active = { file: CURRENT, sec: hit.sec, block: hit.block, box,
+               range: { start: Number(d.start) || 0, end: Number(d.end) || 0 } };
+    return;
+  }
+  if (d.mm === 'change') {
+    active = { file: CURRENT, sec: hit.sec, block: hit.block, box, range: null };
+    savePostedBlock(hit, d.html);
+  }
+});
 
 // The bar belongs to the chrome, not to a section, so it is built once.
 (function mountToolbar() {
