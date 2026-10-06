@@ -94,6 +94,10 @@ INJECT = """
     outline-offset: 2px;
   }
   [contenteditable="true"]{cursor:text}
+  /* Google's stylesheet turns pointer events off on some headings, so the
+     mouse went straight through them: the hover helper said "nothing marked"
+     and the heading could not be clicked into. Edit mode only. */
+  [data-mmb], [data-mmb] *{pointer-events:auto !important}
   /* An empty section — a spacer — has nothing in it to aim at, and can be only
      a few pixels tall. Outline it in a different colour from the blocks, so it
      is visible and obviously clickable rather than invisible furniture. */
