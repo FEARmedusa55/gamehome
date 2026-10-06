@@ -364,6 +364,12 @@ function reloadPreview() {
 // editable. Nothing looks broken, which is what makes it confusing. Notice and
 // put it back.
 (function guardPreview() {
+  // Rate limited, and capped. The point is to recover from a one-off stray
+  // navigation, not to fight a page that keeps doing it: an unthrottled reload
+  // here is a reload loop, which is far worse than a dead preview.
+  let last = 0;
+  let autoReloads = 0;
+
   const mount = () => {
     const f = document.getElementById('preview');
     if (!f) return;
@@ -372,10 +378,15 @@ function reloadPreview() {
       let href = '';
       try { href = f.contentWindow.location.href || ''; } catch (e) { return; }
       if (!href || href === 'about:blank') return;      // our own blanking
-      if (!href.includes('mm_edit')) {
-        toast('The preview navigated away \u2014 putting it back');
-        reloadPreview();
-      }
+      if (href.includes('mm_edit')) { autoReloads = 0; return; }   // good load
+
+      const now = Date.now();
+      if (now - last < 5000) return;                    // never loop
+      if (autoReloads >= 3) return;                     // stop trying
+      last = now;
+      autoReloads++;
+      toast('The preview navigated away \u2014 putting it back');
+      reloadPreview();
     });
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
@@ -1534,8 +1545,6 @@ if (d.mm === 'image') { showImageSwap(d.target); return; }
 // A link clicked in the preview opens in a tab instead of navigating the
 // editing view out from under you.
 if (d.mm === 'open') { window.open(d.href, '_blank', 'noopener,noreferrer'); return; }
-// Something re-rendered and the markers went with it.
-if (d.mm === 'stale') { reloadPreview(); return; }
 const hit = blockFromTarget(d.target);
   if (!hit) return;
   const box = previewEl(d.target);

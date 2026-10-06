@@ -266,21 +266,6 @@ INJECT = """
   // a complete map from a partial one.
   send({ mm: 'ready', matched: matched, expected: TARGETS.length,
          buttons: buttonsTagged, images: imagesTagged });
-
-  // The site runs its own scripts, and anything they re-render would lose its
-  // markers. Re-tag when the tree changes, so the preview cannot quietly stop
-  // being editable part-way through a session.
-  var retagTimer = null;
-  new MutationObserver(function () {
-    clearTimeout(retagTimer);
-    retagTimer = setTimeout(function () {
-      var missing = [...document.querySelectorAll('section')].some(function (s) {
-        return s.querySelectorAll('[data-mmb]').length === 0 &&
-               s.querySelectorAll('[data-mmb-btn], [data-mmb-img]').length === 0;
-      });
-      if (missing) send({ mm: 'stale' });
-    }, 300);
-  }).observe(document.body, { childList: true, subtree: true });
 })();
 </script>
 """
