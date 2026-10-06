@@ -351,9 +351,21 @@ function status(msg) { document.getElementById('status').textContent = msg || ''
 // saves only to that block. See preview_edit.py.
 const PREVIEW_EDIT = true;
 
+let previewWait = null;
+
 function reloadPreview() {
   const f = document.getElementById('preview');
   f.src = 'about:blank';
+  // If the page never reports in, say so rather than leaving a preview that
+  // looks fine and silently is not editable.
+  clearTimeout(previewWait);
+  previewWait = setTimeout(() => {
+    let query = '';
+    try { query = f.contentWindow.location.search || ''; } catch (e) { query = '(unreadable)'; }
+    if (!query.includes('mm_edit')) {
+      status('NOT EDITABLE \u2014 the preview loaded without the edit flag');
+    }
+  }, 7000);
   setTimeout(() => {
     f.src = CURRENT + (PREVIEW_EDIT ? '?mm_edit=1&' : '?') + 't=' + Date.now();
   }, 40);
@@ -1544,15 +1556,20 @@ if (!d.mm) return;
 // edit mode is never a mystery: either it says how many blocks are editable,
 // or it says none are, and you know which side to look at.
 if (d.mm === 'ready') {
+  clearTimeout(previewWait);
   const n = Number(d.matched) || 0;
   const expected = Number(d.expected) || 0;
+  let query = '';
+  try { query = document.getElementById('preview').contentWindow.location.search || ''; }
+  catch (e) { query = '(unreadable)'; }
+  const flag = query.includes('mm_edit') ? 'edit mode' : 'NO EDIT FLAG';
   if (expected && !n) {
-    status('NOT EDITABLE \u2014 this page came back without edit markers');
+    status(`NOT EDITABLE \u2014 page came back without markers (${flag})`);
     toast('The preview loaded without edit markers', true);
   } else if (!expected) {
     status('nothing editable on this page');
   } else {
-    status(`${n} of ${expected} blocks editable \u00b7 click a paragraph to edit`);
+    status(`${n} of ${expected} blocks editable (${flag}) \u00b7 click a paragraph`);
   }
   return;
 }
