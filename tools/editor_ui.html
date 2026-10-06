@@ -369,12 +369,16 @@ function status(msg) { document.getElementById('status').textContent = msg || ''
 const PREVIEW_EDIT = true;
 
 let previewWait = null;
+// Declared, not left implicit: reading an undeclared identifier throws even in
+// non-strict mode, so `clearInterval(previewKeep)` at the top of
+// armPreviewScript killed the watcher before it could start.
+let previewKeep = null;
 
 // Shown in the header. If this does not change when you reload, your browser is
 // serving an old copy of this page — the failure that has bitten repeatedly
 // here, because a stale tab asks for the preview without the edit flag and
 // nothing about it looks wrong.
-const BUILD = '2026-10-05d';
+const BUILD = '2026-10-06c';
 (function stamp() {
   const mount = () => {
     const b = document.getElementById('build');
@@ -390,6 +394,72 @@ function warn(html) {
   if (!w) return;
   w.hidden = !html;
   w.innerHTML = html || '';
+}
+
+// The page's own scripts can replace the document after it loads, which wipes
+// anything injected into its markup. That is what happens here in Firefox: the
+// site's bundle throws (_._DumpException is not a function) and the page
+// re-renders, so the markers show for a frame and then vanish.
+//
+// This frame's JavaScript does demonstrably run, so it fetches the marker style
+// and script and puts them into the frame itself, then keeps checking and puts
+// them back if the page replaces itself again.
+function armPreviewScript() {
+  const f = document.getElementById('preview');
+  clearInterval(previewKeep);
+
+  // The watcher's own state, written onto the preview element as data attributes.
+  // Reading the editor's globals is not possible from outside the page's script
+  // world, so this is how the watcher reports in. data-mmstate says what it did
+  // last; data-mmwatch counts its ticks.
+  let ticks = 0;
+  const inject = () => {
+    ticks += 1;
+    f.dataset.mmwatch = String(ticks);
+    try {
+      let d = null;
+      try { d = f.contentDocument; } catch (e) { f.dataset.mmstate = 'no-access'; return; }
+      if (!d || !d.body) { f.dataset.mmstate = 'not-ready'; return; }
+      if (d.getElementById('mm-dbg') || d.getElementById('mm-edit-live')) {
+        f.dataset.mmstate = 'already-ok';
+        return;
+      }
+      f.dataset.mmstate = 'fetching';
+      fetch('mm-edit.js?file=' + encodeURIComponent(CURRENT))
+        .then(r => r.json())
+        .then(parts => {
+          if (!parts || !parts.script) { f.dataset.mmstate = 'empty-response'; return; }
+          const d2 = f.contentDocument;
+          if (!d2 || !d2.body) { f.dataset.mmstate = 'no-doc-late'; return; }
+          if (d2.getElementById('mm-dbg') || d2.getElementById('mm-edit-live')) {
+            f.dataset.mmstate = 'already-ok-late';
+            return;
+          }
+          const st = d2.createElement('style');
+          st.id = 'mm-edit-live-style';
+          st.textContent = parts.style || '';
+          (d2.head || d2.documentElement).appendChild(st);
+          const sc = d2.createElement('script');
+          sc.id = 'mm-edit-live';
+          sc.textContent = parts.script;
+          d2.body.appendChild(sc);
+          f.dataset.mmstate = 'injected';
+          console.log('[editor] injected the marker script into the preview frame');
+        })
+        .catch(err => {
+          f.dataset.mmstate = 'fetch-failed: ' + err;
+          console.warn('[editor] mm-edit.js failed:', err);
+        });
+    } catch (e) {
+      f.dataset.mmstate = 'threw: ' + e;
+    }
+  };
+
+  // Keep watching for the whole session, not just a few seconds: the page could
+  // replace itself at any point, and this is what puts the markers back when it
+  // does. inject() returns immediately when the markers are already there, so
+  // this is cheap. The next reload clears it.
+  previewKeep = setInterval(inject, 500);
 }
 
 function reloadPreview() {
@@ -411,6 +481,9 @@ function reloadPreview() {
   }, 7000);
   setTimeout(() => {
     f.src = CURRENT + (PREVIEW_EDIT ? '?mm_edit=1&' : '?') + 't=' + Date.now();
+    // And put the markers in ourselves, in case the page's own scripts replace
+    // the document after load and take the served copy with them.
+    if (PREVIEW_EDIT) armPreviewScript();
   }, 40);
 }
 

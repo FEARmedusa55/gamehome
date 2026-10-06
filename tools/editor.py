@@ -1112,6 +1112,26 @@ class Handler(BaseHTTPRequestHandler):
             self._json(api_page(page))
             return
 
+        # The editor injects the marker style and script into the preview frame
+        # itself, rather than relying on the ones served inside the page: the
+        # page's own scripts can replace the document after load and wipe them.
+        if route == "/mm-edit.js":
+            q = parse_qs(parsed.query)
+            page = (q.get("file") or [""])[0]
+            try:
+                if page in site_pages():
+                    folder = CONTENT / Path(page).stem
+                    names = manifest_of(page)["sections"]
+                    targets = preview_edit.targets(section_info, folder, names)
+                    self._json(preview_edit.parts(targets))
+                    print(f"  preview edit js: {page} — {len(targets)} blocks to match")
+                    return
+                print(f"  preview edit js: {page} is not a site page")
+            except Exception as exc:                          # noqa: BLE001
+                print(f"  preview edit js failed: {exc}")
+            self._json({"style": "", "script": ""})
+            return
+
         # static files from the project root, so the preview iframe works
         rel = route.lstrip("/") or "index.html"
         target = (HERE / rel).resolve()

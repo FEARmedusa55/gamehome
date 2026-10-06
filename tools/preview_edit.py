@@ -400,3 +400,29 @@ def inject(page_html: str, targets_list: list[dict]) -> str:
     if "</body>" in page_html:
         return page_html.replace("</body>", block + "</body>", 1)
     return page_html + block
+
+
+def parts(targets_list: list[dict]) -> dict:
+    """The injected style and script separately, for the editor to inject itself.
+
+    Serving the script inside the page is not enough on its own: the page's own
+    scripts can replace the document after it loads, which wipes anything that
+    was in that markup. That is what happens here in Firefox, where the site's
+    own bundle throws (_._DumpException is not a function) and the page
+    re-renders — the markers show for a frame and then are gone.
+
+    The editor frame's own JavaScript does run, so it can put these in the frame
+    after the page settles, and put them back if the page replaces itself again.
+    """
+    payload = json.dumps(targets_list, separators=(",", ":"))
+    cut = INJECT.find("<script")
+    style, script = INJECT[:cut], INJECT[cut:]
+    # Strip the wrapper tags: the editor sets these as textContent on elements it
+    # creates, so leaving "<script …>" in front would make the JavaScript
+    # invalid. The tags are only needed when serving them inside a page.
+    style = style[style.find(">") + 1:style.rfind("</style>")]
+    script = script[script.find(">") + 1:script.rfind("</script>")]
+    return {
+        "style": style.replace("__TARGETS__", payload),
+        "script": script.replace("__TARGETS__", payload),
+    }
