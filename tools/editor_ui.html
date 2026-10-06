@@ -408,7 +408,7 @@ let previewKeep = null;
 // serving an old copy of this page — the failure that has bitten repeatedly
 // here, because a stale tab asks for the preview without the edit flag and
 // nothing about it looks wrong.
-const BUILD = '2026-10-06q';
+const BUILD = '2026-10-06r';
 (function stamp() {
   const mount = () => {
     const b = document.getElementById('build');
@@ -818,11 +818,31 @@ function escHtml(s) {
 function nodeText(node) {
   let out = '';
   node.childNodes.forEach(c => {
-    if (c.nodeType === 3) out += c.nodeValue;
-    else if (c.nodeName === 'BR') out += '\n';
+    if (c.nodeType === 3) out += shownText(c);
+    else if (c.nodeName === 'BR') out += brShows(c) ? '\n' : '';
     else out += nodeText(c);
   });
   return out;
+}
+
+// Does this <br> really start a new line? Firefox (and LibreWolf) slip
+// invisible ones into text while you type; saved, they became real line
+// breaks on the site. The preview page measures it (__mmIsBreak); a <br>
+// outside the live page — a copy — is taken at its word.
+function brShows(br) {
+  try {
+    const f = br.isConnected && br.ownerDocument.defaultView.__mmIsBreak;
+    return f ? f(br) : true;
+  } catch (e) { return true; }
+}
+
+// A text node as it reads: a newline character shows as a space unless the
+// text keeps whitespace (pre / pre-wrap). Same length, so offsets still fit.
+function shownText(t) {
+  const v = t.nodeValue;
+  if (!/[\r\n]/.test(v) || !t.isConnected || !t.parentElement) return v;
+  const ws = t.ownerDocument.defaultView.getComputedStyle(t.parentElement).whiteSpace;
+  return /^(pre|break-spaces)/.test(ws) ? v : v.replace(/[\r\n]/g, ' ');
 }
 
 function partsToHtml(parts) {
@@ -919,11 +939,31 @@ function boxSelection(box) {
   const r = sel.getRangeAt(0);
   if (r.collapsed) return null;
   if (!box.contains(r.startContainer) || !box.contains(r.endContainer)) return null;
-  const before = doc.createRange();
-  before.selectNodeContents(box);
-  before.setEnd(r.startContainer, r.startOffset);
-  const start = nodeText(before.cloneContents()).length;
-  return { start, end: start + nodeText(r.cloneContents()).length };
+  // Counted over the live box, not a copy: only the live page can say which
+  // line breaks show (brShows), and nodeText counts only those.
+  return { start: liveOffset(box, r.startContainer, r.startOffset),
+           end: liveOffset(box, r.endContainer, r.endOffset) };
+}
+
+function liveOffset(box, container, offset) {
+  const doc = box.ownerDocument;
+  const r = doc.createRange();
+  r.selectNodeContents(box);
+  try { r.setEnd(container, offset); } catch (e) { return nodeText(box).length; }
+  const w = doc.createTreeWalker(box, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  let n = 0, x;
+  while ((x = w.nextNode())) {
+    if (x.nodeType === 3) {
+      if (x === r.endContainer) { n += Math.min(r.endOffset, x.nodeValue.length); break; }
+      if (r.comparePoint(x, x.nodeValue.length) !== 0) break;
+      n += x.nodeValue.length;
+    } else if (x.nodeName === 'BR') {
+      const at = Array.prototype.indexOf.call(x.parentNode.childNodes, x) + 1;
+      if (r.comparePoint(x.parentNode, at) !== 0) break;
+      if (brShows(x)) n += 1;
+    }
+  }
+  return n;
 }
 
 
@@ -939,7 +979,7 @@ function selectRange(box, start, end) {
   let at = 0, from = null, to = null, n;
   while ((n = walker.nextNode())) {
     if (n.nodeType === 1) {
-      if (n.nodeName === 'BR') at += 1;
+      if (n.nodeName === 'BR' && brShows(n)) at += 1;
       continue;
     }
     const len = n.nodeValue.length;
@@ -1007,7 +1047,7 @@ function looksBold(box, range) {
   const walker = box.ownerDocument.createTreeWalker(box, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
   let at = 0, n, touched = 0;
   while ((n = walker.nextNode())) {
-    if (n.nodeType === 1) { if (n.nodeName === 'BR') at += 1; continue; }
+    if (n.nodeType === 1) { if (n.nodeName === 'BR' && brShows(n)) at += 1; continue; }
     const len = n.nodeValue.length;
     if (at < range.end && at + len > range.start && n.nodeValue.trim()) {
       touched++;
