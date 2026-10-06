@@ -173,6 +173,16 @@ INJECT = """
       return;
     }
     var el = e.target.closest && e.target.closest('[data-mmb]');
+    // Never let a link navigate the preview. A navigation leaves the flagged
+    // page behind — markers and this script gone — and the preview silently
+    // stops being editable mid-session, which is confusing precisely because
+    // nothing looks broken. Hold a modifier to open one in a new tab instead.
+    // Heading anchors (#…) are let through: they only scroll.
+    var a = e.target.closest && e.target.closest('a[href]');
+    if (a && !(a.getAttribute('href') || '').startsWith('#')) {
+      e.preventDefault();
+      if (e.metaKey || e.ctrlKey) send({ mm: 'open', href: a.getAttribute('href') });
+    }
     if (!el) return;
     // Let links inside a paragraph keep working when you hold a modifier.
     if (e.target.closest('a[href]') && (e.metaKey || e.ctrlKey)) return;
@@ -256,6 +266,21 @@ INJECT = """
   // a complete map from a partial one.
   send({ mm: 'ready', matched: matched, expected: TARGETS.length,
          buttons: buttonsTagged, images: imagesTagged });
+
+  // The site runs its own scripts, and anything they re-render would lose its
+  // markers. Re-tag when the tree changes, so the preview cannot quietly stop
+  // being editable part-way through a session.
+  var retagTimer = null;
+  new MutationObserver(function () {
+    clearTimeout(retagTimer);
+    retagTimer = setTimeout(function () {
+      var missing = [...document.querySelectorAll('section')].some(function (s) {
+        return s.querySelectorAll('[data-mmb]').length === 0 &&
+               s.querySelectorAll('[data-mmb-btn], [data-mmb-img]').length === 0;
+      });
+      if (missing) send({ mm: 'stale' });
+    }, 300);
+  }).observe(document.body, { childList: true, subtree: true });
 })();
 </script>
 """
