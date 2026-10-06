@@ -378,7 +378,7 @@ let previewKeep = null;
 // serving an old copy of this page — the failure that has bitten repeatedly
 // here, because a stale tab asks for the preview without the edit flag and
 // nothing about it looks wrong.
-const BUILD = '2026-10-06f';
+const BUILD = '2026-10-06h';
 (function stamp() {
   const mount = () => {
     const b = document.getElementById('build');
@@ -1460,12 +1460,18 @@ function buildToolbar() {
   // A <select> fires change only when the value actually differs, so choosing 12
   // for one paragraph and then 12 for another did nothing the second time. This
   // is a menu of sizes, not a display of the current one — it was never synced
-  // to the block — so it resets to its label as it opens and every pick counts.
-  sizeSel.onmousedown = () => { sizeSel.value = ''; };
+  // to the block — so it clears itself after each use and every pick counts.
+  //
+  // Clearing on mousedown seemed right but the click that picks an option also
+  // mousedowns the select in some browsers, so the value was already empty by
+  // the time change ran and nothing was ever applied. Clearing after applying
+  // has no such race.
   sizeSel.onchange = () => {
-    if (!sizeSel.value) return;
+    const v = sizeSel.value;
+    sizeSel.value = '';
+    if (!v) return;
     const a = activeBox(); if (!a) return;
-    apply('font-size', sizeSel.value);
+    apply('font-size', v);
   };
   tb.appendChild(sizeSel);
 
@@ -1745,7 +1751,9 @@ if (d.mm === 'image') { showImageSwap(d.target); return; }
 // selection and the section buttons (↑ ↓ duplicate delete) work on it.
 if (d.mm === 'section') {
   const si = Number(d.target);
-  const secs = (STATE.sections || []);
+  // CURRENT_DATA is the same structure blockFromTarget reads; STATE has no
+  // sections, which is why this said "could not find that section".
+  const secs = (CURRENT_DATA && CURRENT_DATA.sections) || [];
   const s = secs[si];
   if (!s) { toast('Could not find that section', true); return; }
   active = { file: CURRENT, sec: s, block: null, box: null, range: null };

@@ -94,6 +94,15 @@ INJECT = """
     outline-offset: 2px;
   }
   [contenteditable="true"]{cursor:text}
+  /* An empty section — a spacer — has nothing in it to aim at, and can be only
+     a few pixels tall. Outline it in a different colour from the blocks, so it
+     is visible and obviously clickable rather than invisible furniture. */
+  [data-mmb-sec]{
+    outline: 1px dashed rgba(255,193,102,.5) !important;
+    outline-offset: -1px;
+    cursor: pointer;
+  }
+  [data-mmb-sec]:hover{outline-color: rgba(255,193,102,.95) !important}
 </style>
 <script id="mm-edit-js">
 (function () {
