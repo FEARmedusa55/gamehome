@@ -129,6 +129,16 @@ html.mmNavOpen #yuynLe{overflow-y:auto;box-shadow:4px 0 24px rgba(0,0,0,.5)}
    Google left for it (96px above the menu, 56px inside it), so it opens
    straight under the bar. Only the drawer: the desktop sidebar never opens. */
 html.mmNavOpen #yuynLe{margin-top:56px !important;padding-top:8px !important}
+/* Blocks placed with the editor's free move (data-mmfree) keep their spot on
+   wide screens. On a phone that spot, measured on a wide screen, lands on top
+   of other text or off the edge, so there they go back in line with the rest
+   of the page, and the room their section kept for them goes too. These rules
+   need !important to beat the block's own inline position. */
+@media (max-width: 767px){
+  [data-mmfree]{position:static !important;left:auto !important;top:auto !important;
+    width:auto !important;transform:none !important}
+  [data-mmfree-area]{min-height:0 !important}
+}
 #mm-nav-back{display:none}
 html.mmNavOpen #mm-nav-back{display:block;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:69}
 /* Search */
