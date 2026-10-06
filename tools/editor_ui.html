@@ -378,7 +378,7 @@ let previewKeep = null;
 // serving an old copy of this page — the failure that has bitten repeatedly
 // here, because a stale tab asks for the preview without the edit flag and
 // nothing about it looks wrong.
-const BUILD = '2026-10-06h';
+const BUILD = '2026-10-06i';
 (function stamp() {
   const mount = () => {
     const b = document.getElementById('build');
@@ -1328,7 +1328,7 @@ function buildToolbar() {
   setInterval(() => {
     where.textContent = active && active.block
       ? `${(active.block.tag || 'text')} ${active.block.id}`
-      : 'style';
+      : (active && active.sec ? 'section' : 'style');
   }, 400);
 
   const activeBox = () => {
@@ -1692,6 +1692,15 @@ function blockFromTarget(target) {
   return { sec, block: blk };
 }
 
+// The section a "section:index" target belongs to, for widgets that are not
+// blocks — buttons and images — so their section can still be selected.
+function sectionAt(target) {
+  if (!CURRENT_DATA || !target) return null;
+  const m = /^(\d+):/.exec(String(target));
+  if (!m) return null;
+  return (CURRENT_DATA.sections || [])[Number(m[1])] || null;
+}
+
 function previewEl(target) {
   const doc = document.getElementById('preview').contentDocument;
   return doc ? doc.querySelector('[data-mmb="' + target + '"]') : null;
@@ -1744,8 +1753,21 @@ if (d.mm === 'ready') {
   }
   return;
 }
-if (d.mm === 'button') { showButtonFields(d.target); return; }
-if (d.mm === 'image') { showImageSwap(d.target); return; }
+if (d.mm === 'button') {
+  // Selecting a button must also select the section it sits in, or the section
+  // buttons have nothing to act on — which is why a section made only of buttons
+  // (a leftover row of links, say) could not be removed at all.
+  const bSec = sectionAt(d.target);
+  if (bSec) active = { file: CURRENT, sec: bSec, block: null, box: null, range: null };
+  showButtonFields(d.target);
+  return;
+}
+if (d.mm === 'image') {
+  const iSec = sectionAt(d.target);
+  if (iSec) active = { file: CURRENT, sec: iSec, block: null, box: null, range: null };
+  showImageSwap(d.target);
+  return;
+}
 // A section clicked with nothing editable inside it — a spacer, an empty
 // divider. There is no block to act on, so the section itself becomes the
 // selection and the section buttons (↑ ↓ duplicate delete) work on it.
