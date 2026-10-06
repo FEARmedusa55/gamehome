@@ -40,6 +40,7 @@ import sections as sections_mod    # noqa: E402
 import buttons as buttons_mod      # noqa: E402
 import lists as lists_mod          # noqa: E402
 import preview_edit               # noqa: E402
+import publish as publish_mod      # noqa: E402
 import textedit as textedit_mod    # noqa: E402
 import sitekit                    # noqa: E402
 
@@ -678,8 +679,36 @@ ACTION_LABELS = {
 LOCK = threading.RLock()
 
 
+GIT_ACTIONS = ("git_status", "publish", "git_update", "git_main")
+
+
+def _git_action(payload: dict) -> dict:
+    """The Publish panel: status, publish, get latest, switch to main."""
+    action = payload["action"]
+    try:
+        if action == "git_status":
+            result = publish_mod.status()
+        elif action == "publish":
+            result = publish_mod.publish(str(payload.get("note") or ""))
+        elif action == "git_update":
+            result = publish_mod.update()
+        else:
+            result = publish_mod.to_main()
+    except publish_mod.GitError as exc:
+        return {"ok": False, "error": str(exc), "undoDepth": undo_depth()}
+    if result.get("pulled") or result.get("reload"):
+        # The files just changed underneath the undo history: undoing now
+        # would quietly roll back what came in from GitHub.
+        shutil.rmtree(UNDO, ignore_errors=True)
+        result["undoCleared"] = True
+    result["undoDepth"] = undo_depth()
+    return result
+
+
 def act(payload: dict) -> dict:
     with LOCK:
+        if payload.get("action") in GIT_ACTIONS:
+            return _git_action(payload)
         result = _act(payload)
         # Every answer says how deep undo now goes, so the Undo button can
         # follow edits made in the preview — before, it stayed disabled until
