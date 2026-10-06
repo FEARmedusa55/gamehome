@@ -147,9 +147,17 @@ INJECT = """
     // paragraph is the one worth editing, so the wrapper is dropped.
     var candidates = all.filter(function (c) {
       return !byText[c.txt].some(function (d) { return d !== c && c.el.contains(d.el); });
+    }).filter(function (c) {
+      // Run again later, it leaves blocks that are already marked alone —
+      // their text may have changed since (that is what editing does), and
+      // re-matching them could hand a marker to a different block.
+      return !c.el.closest('[data-mmb]') && !c.el.querySelector('[data-mmb]');
     });
 
     var used = {};
+    document.querySelectorAll('[data-mmb]').forEach(function (el) {
+      used[el.getAttribute('data-mmb')] = 1;
+    });
     var matched = 0;
     // Two passes: an exact normalized match first, then — only if that found
     // nothing — a comparison with all whitespace removed.
@@ -238,7 +246,11 @@ INJECT = """
   var imagesTagged = counts.images;
 
   var box = null;
-  var dirty = false;
+  // Which blocks have unsaved typing, each tracked on its own. One shared
+  // flag checked against `box` lost edits: clicking straight from one
+  // paragraph into another moves `box` on mousedown, before the first
+  // paragraph's focusout runs, so that paragraph was never saved.
+  var edited = new WeakSet();
 
   function tag(el) { return el && el.getAttribute ? el.getAttribute('data-mmb') : null; }
 
@@ -431,7 +443,7 @@ INJECT = """
 
   document.addEventListener('input', function (e) {
     var el = e.target.closest && e.target.closest('[data-mmb]');
-    if (el) dirty = true;
+    if (el) edited.add(el);
   });
 
   // Report the words you have selected, so the bar styles those and not the
@@ -453,11 +465,222 @@ INJECT = """
   });
 
   document.addEventListener('focusout', function (e) {
+    if (busy) return;
     var el = e.target.closest && e.target.closest('[data-mmb]');
-    if (!el || el !== box) return;
-    if (!dirty) return;          // nothing typed, nothing to save
-    dirty = false;
+    if (!el) return;
+    // A list whose shape changed is saved whole, once you leave it. Moving
+    // between its own bullets is not leaving it.
+    var root = dirtyRoot(el);
+    if (root) {
+      if (e.relatedTarget && root.contains(e.relatedTarget)) return;
+      root.querySelectorAll('[data-mmb]').forEach(function (n) { edited.delete(n); });
+      send({ mm: 'list', target: tag(el) });
+      return;
+    }
+    if (!edited.has(el)) return;   // nothing typed, nothing to save
+    edited.delete(el);
     send({ mm: 'change', target: tag(el), html: currentHtml(el) });
+  }, true);
+
+
+  // --- lists, Word style -----------------------------------------------------
+  // Shift+Enter starts a new bullet, Tab / Shift+Tab indent and outdent, and
+  // Backspace at the start of a bullet joins it to the one above. The change
+  // happens here, in the page, at once; the list is marked as changed and is
+  // saved as a whole when you click outside it (see the focusout handler).
+  // New bullets get a provisional marker, "<anchor>+<n>", so clicks, focus and
+  // styling all keep working on them before the list is saved.
+  var ZW = String.fromCharCode(8203);
+  var newCount = 0;
+  var busy = false;           // moving nodes blurs them; that blur is not a save
+
+  function isList(el) { return !!el && (el.tagName === 'UL' || el.tagName === 'OL'); }
+  function itemOf(el) { return el && el.closest ? el.closest('li') : null; }
+  function rootOf(el) {
+    var r = null;
+    for (var n = el; n; n = n.parentElement) if (isList(n)) r = n;
+    return r;
+  }
+  function subOf(li) {
+    for (var c = li.firstElementChild; c; c = c.nextElementSibling) if (isList(c)) return c;
+    return null;
+  }
+  function bodyOf(li) {
+    for (var c = li.firstElementChild; c; c = c.nextElementSibling) if (c.tagName === 'P') return c;
+    return li;
+  }
+  function dirtyRoot(el) {
+    var r = rootOf(el);
+    return r && r.getAttribute('data-mm-list') === 'dirty' ? r : null;
+  }
+  function markDirty(root) {
+    if (!root || root.getAttribute('data-mm-list') === 'dirty') return;
+    root.setAttribute('data-mm-list', 'dirty');
+    send({ mm: 'list-dirty' });
+  }
+  function baseMark(li) {
+    var own = bodyOf(li).getAttribute('data-mmb');
+    if (own) return own.split('+')[0];
+    var any = rootOf(li).querySelector('[data-mmb]');
+    return any ? any.getAttribute('data-mmb').split('+')[0] : '';
+  }
+  function plainText(el) { return el.textContent.split(ZW).join(''); }
+  // An empty bullet still needs somewhere for the caret, and text typed into
+  // it should pick up the bullet's styling: a zero-width space inside its
+  // last span. The editor strips these when it saves.
+  function keepOpen(body) {
+    if (plainText(body).trim()) return;
+    var spans = body.querySelectorAll('span');
+    var holder = spans.length ? spans[spans.length - 1] : body;
+    holder.textContent = ZW;
+  }
+  function caretIn(body) {
+    var s = document.getSelection();
+    if (!s.rangeCount) return 0;
+    var r = s.getRangeAt(0);
+    return offsetOf(body, r.startContainer, r.startOffset);
+  }
+  function setCaret(body, off) {
+    body.focus();
+    var w = document.createTreeWalker(body, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+    var at = 0, n, last = null, r = document.createRange();
+    while ((n = w.nextNode())) {
+      if (n.nodeType === 1) { if (n.nodeName === 'BR') at += 1; continue; }
+      if (isList(n.parentElement)) continue;
+      last = n;
+      if (at + n.nodeValue.length >= off) { r.setStart(n, Math.max(0, off - at)); break; }
+      at += n.nodeValue.length;
+    }
+    if (!r.startContainer || r.startContainer === document) {
+      if (last) r.setStart(last, last.nodeValue.length); else r.setStart(body, 0);
+    }
+    r.collapse(true);
+    var s = document.getSelection();
+    s.removeAllRanges();
+    s.addRange(r);
+    box = body;
+  }
+  function freshList(like) {
+    var l = like.cloneNode(false);
+    l.removeAttribute('data-mm-list');
+    return l;
+  }
+
+  function split(li, body) {
+    var s = document.getSelection();
+    if (!s.rangeCount) return;
+    var r = s.getRangeAt(0);
+    if (!r.collapsed) r.deleteContents();
+    var sub = subOf(li);
+    var tail = document.createRange();
+    tail.setStart(r.startContainer, r.startOffset);
+    if (body === li && sub) tail.setEndBefore(sub); else tail.setEnd(body, body.childNodes.length);
+    var frag = tail.extractContents();
+    var fresh = li.cloneNode(false);
+    var freshBody = body === li ? fresh : body.cloneNode(false);
+    if (freshBody !== fresh) fresh.appendChild(freshBody);
+    freshBody.appendChild(frag);
+    // Whatever was nested under this bullet now follows the new one, so the
+    // order on the page stays the same — as in Word.
+    if (sub) fresh.appendChild(sub);
+    li.parentNode.insertBefore(fresh, li.nextSibling);
+    freshBody.setAttribute('data-mmb', baseMark(li) + '+' + (++newCount));
+    freshBody.setAttribute('contenteditable', 'true');
+    keepOpen(body);
+    keepOpen(freshBody);
+    busy = true;
+    setCaret(freshBody, 0);
+    busy = false;
+    markDirty(rootOf(fresh));
+  }
+
+  function indent(li, body) {
+    var prev = li.previousElementSibling;
+    if (!prev || prev.tagName !== 'LI') return;
+    var off = caretIn(body);
+    busy = true;
+    var sub = subOf(prev);
+    if (!sub) { sub = freshList(li.parentNode); prev.appendChild(sub); }
+    sub.appendChild(li);
+    setCaret(body, off);
+    busy = false;
+    markDirty(rootOf(li));
+  }
+
+  function outdent(li, body) {
+    var list = li.parentNode, parentLi = list.parentElement;
+    if (!parentLi || parentLi.tagName !== 'LI') return false;
+    var off = caretIn(body);
+    busy = true;
+    // The bullets after this one become its children, as in Word, so nothing
+    // jumps above it on the page.
+    var after = [];
+    for (var n = li.nextElementSibling; n; n = n.nextElementSibling) after.push(n);
+    if (after.length) {
+      var own = subOf(li);
+      if (!own) { own = freshList(list); li.appendChild(own); }
+      after.forEach(function (x) { own.appendChild(x); });
+    }
+    parentLi.parentNode.insertBefore(li, parentLi.nextSibling);
+    if (!list.children.length) list.remove();
+    setCaret(body, off);
+    busy = false;
+    markDirty(rootOf(li));
+    return true;
+  }
+
+  function join(li, body) {
+    if (!li.previousElementSibling) return outdent(li, body);   // top of its level
+    var prev = li.previousElementSibling;
+    while (subOf(prev) && subOf(prev).lastElementChild) prev = subOf(prev).lastElementChild;
+    var prevBody = bodyOf(prev);
+    busy = true;
+    var keep = plainText(prevBody).trim() ? null : prevBody;     // an empty bullet: replace it
+    if (keep) prevBody.textContent = '';
+    var off = textLen(prevBody);
+    var ownSub = subOf(li);
+    var nodes = [];
+    for (var c = body.firstChild; c; c = c.nextSibling) if (c !== ownSub) nodes.push(c);
+    var before = prevBody === prev ? subOf(prev) : null;
+    nodes.forEach(function (x) { prevBody.insertBefore(x, before); });
+    if (ownSub) prev.appendChild(ownSub);
+    var root = rootOf(li);
+    li.remove();
+    keepOpen(prevBody);
+    setCaret(prevBody, off);
+    busy = false;
+    markDirty(root);
+    return true;
+  }
+
+  document.addEventListener('keydown', function (e) {
+    var host = e.target && e.target.closest ? e.target.closest('[data-mmb]') : null;
+    if (!host || host.getAttribute('contenteditable') !== 'true') return;
+    var li = itemOf(host);
+    if (li && !rootOf(li)) li = null;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (e.shiftKey && li) { split(li, host); return; }
+      // Enter is a new line inside the same paragraph or bullet.
+      document.execCommand('insertLineBreak');
+      return;
+    }
+    if (!li) return;
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      if (e.shiftKey) outdent(li, host); else indent(li, host);
+      return;
+    }
+    if (e.key === 'Backspace') {
+      var s = document.getSelection();
+      if (!s.rangeCount || !s.getRangeAt(0).collapsed) return;
+      // At the very start, ignoring a placeholder zero-width space.
+      var r = document.createRange();
+      r.selectNodeContents(host);
+      r.setEnd(s.getRangeAt(0).startContainer, s.getRangeAt(0).startOffset);
+      if (r.toString().split(ZW).join('') !== '') return;
+      if (join(li, host)) e.preventDefault();
+    }
   }, true);
 
   // --- moving ---------------------------------------------------------------

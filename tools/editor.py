@@ -38,6 +38,7 @@ import content as content_mod     # noqa: E402
 import platforms as platforms_mod  # noqa: E402
 import sections as sections_mod    # noqa: E402
 import buttons as buttons_mod      # noqa: E402
+import lists as lists_mod          # noqa: E402
 import preview_edit               # noqa: E402
 import textedit as textedit_mod    # noqa: E402
 import sitekit                    # noqa: E402
@@ -653,6 +654,7 @@ def api_page(page_file: str) -> dict:
 ACTION_LABELS = {
     "set_block": "edit paragraph",
     "set_buttons": "edit buttons",
+    "set_list": "edit list",
     "set_free": "move block",
     "set_default_image": "set default image",
     "set_image": "swap image",
@@ -712,7 +714,7 @@ def _act(payload: dict) -> dict:
     # Edits inside one page snapshot just that page. set_block — the save
     # behind every paragraph edit — used to snapshot the whole site, so each
     # one copied every page and all staged content.
-    page_scoped = action in ("set_block", "set_buttons", "set_free",
+    page_scoped = action in ("set_block", "set_list", "set_buttons", "set_free",
                              "set_image", "drop_section", "move_section", "add_section")
     if page_scoped and (not page or page not in site_pages()):
         return {"ok": False, "error": "unknown page"}
@@ -783,6 +785,23 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
         span_class = payload.get("spanClass") or "C9DxTc"
         inner = textedit_mod.render_parts(parts, span_class=span_class)
         write(path, html[:c_start] + inner + html[c_end:])
+        return {"ok": True, "rebuilt": rebuild(page)}
+
+    if action == "set_list":
+        # A list whose shape changed — a bullet added, indented, outdented or
+        # joined — comes back whole, and is rebuilt from that tree. Plain
+        # typing inside one bullet still goes through set_block.
+        folder = ensure_staged(page)
+        path = folder / payload["section"]
+        html = textedit_mod.merge_spans(read(path))
+        items = payload.get("items")
+        if not isinstance(items, list):
+            return {"ok": False, "error": "need a list of items"}
+        new = lists_mod.rewrite(html, payload.get("block"), items,
+                                payload.get("spanClass") or "C9DxTc")
+        if new is None:
+            return {"ok": False, "error": "that paragraph is not in a list"}
+        write(path, new)
         return {"ok": True, "rebuilt": rebuild(page)}
 
     if action == "set_buttons":
