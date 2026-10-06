@@ -408,7 +408,7 @@ let previewKeep = null;
 // serving an old copy of this page — the failure that has bitten repeatedly
 // here, because a stale tab asks for the preview without the edit flag and
 // nothing about it looks wrong.
-const BUILD = '2026-10-06p';
+const BUILD = '2026-10-06q';
 (function stamp() {
   const mount = () => {
     const b = document.getElementById('build');
@@ -1688,11 +1688,11 @@ const hit = blockFromTarget(d.target);
   }
   if (d.mm === 'move') {
     active = { file: CURRENT, sec: hit.sec, block: hit.block, provisional: hit.provisional, box, range: null };
-    movePostedBlock(hit, d.left, d.top);
+    movePostedBlock(hit, d.left, d.top, d.width);
   }
 });
 
-async function movePostedBlock(hit, left, top) {
+async function movePostedBlock(hit, left, top, width) {
   if (hit.provisional) {
     toast('Click outside the list to save it first, then move it', true);
     reloadPreview();
@@ -1701,10 +1701,10 @@ async function movePostedBlock(hit, left, top) {
   try {
     status('moving\u2026');
     await post({ action: 'set_free', file: CURRENT, section: hit.sec.file,
-                 block: hit.block.id, left, top });
-    // A pinned block keeps its pixel position at every screen width, so on a
-    // phone it can land on top of other text.
-    toast('Moved \u2014 check the page at phone width: a placed block can overlap text there');
+                 block: hit.block.id, left, top, width });
+    // A placed block keeps its spot on wide screens; on a phone the site
+    // puts it back in line with the rest of the page (sitekit, data-mmfree).
+    toast('Moved \u2014 on phones it goes back in line with the rest of the page');
     status('saved ' + new Date().toLocaleTimeString());
     reloadPreview();
   } catch (e) { toast(e.message, true); status('move failed'); }

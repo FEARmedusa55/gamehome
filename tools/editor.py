@@ -872,11 +872,18 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
         left, top = payload.get("left"), payload.get("top")
         if left is None or top is None:
             return {"ok": False, "error": "need left and top"}
+        # Left as a share of the width it sits in, when the preview says how
+        # wide that was: a pixel offset measured on one screen lands
+        # somewhere else on a narrower one. On a phone the block goes back
+        # into the normal flow altogether (data-mmfree, see sitekit).
+        width = float(payload.get("width") or 0)
+        left_css = (f"{max(0.0, min(95.0, float(left) / width * 100)):.2f}%" if width > 0
+                    else f"{int(round(float(left)))}px")
         props = {"position": "absolute",
-                 "left": f"{int(round(float(left)))}px",
+                 "left": left_css,
                  "top": f"{int(round(float(top)))}px",
                  "z-index": "3"}
-        new = textedit_mod.set_block_props(html, payload.get("block"), props)
+        new = textedit_mod.set_block_props(html, payload.get("block"), props, mark_free=True)
         if new == html:
             return {"ok": False, "error": "block not found, or nothing changed"}
         write(path, new)

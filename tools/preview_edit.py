@@ -720,9 +720,12 @@ INJECT = """
     // transform is cleared just above, so measuring the element now would
     // report its original place and throw the move away.
     var pr = d.el.offsetParent ? d.el.offsetParent.getBoundingClientRect() : { left: 0, top: 0 };
+    // The width it sits in goes too, so the editor can store left as a
+    // share of that width rather than a pixel count tied to this screen.
     send({ mm: 'move', target: tag(d.el),
            left: Math.round(d.left - pr.left + d.dx),
-           top: Math.round(d.top - pr.top + d.dy) });
+           top: Math.round(d.top - pr.top + d.dy),
+           width: Math.round(pr.width || 0) });
   });
 
   // Tell the editor how many of the expected blocks we found, so it can tell

@@ -425,7 +425,10 @@ def cmd_set(args) -> int:
     return 0
 
 
-def set_block_props(html: str, block_id, props: dict) -> str:
+FREE_ATTR = 'data-mmfree="1"'
+
+
+def set_block_props(html: str, block_id, props: dict, mark_free: bool = False) -> str:
     """Set inline style properties on the block whose id is block_id.
 
     Used for positioning a block freely and for restyling a button. Anchored by
@@ -465,6 +468,10 @@ def set_block_props(html: str, block_id, props: dict) -> str:
         new_tag = tag[:style.start()] + f'style="{new_style}"' + tag[style.end():]
     else:
         new_tag = tag[:-1].rstrip() + f' style="{new_style}">'
+    # Free-moved blocks are tagged, so the site's stylesheet can put them back
+    # in the normal flow on a phone (sitekit.SITE_CSS).
+    if mark_free and FREE_ATTR not in new_tag:
+        new_tag = new_tag[:-1].rstrip() + f" {FREE_ATTR}>"
     return merged[:lt] + new_tag + merged[gt + 1:]
 
 
