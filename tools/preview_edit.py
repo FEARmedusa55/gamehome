@@ -56,9 +56,19 @@ def targets(section_info, page_folder, names) -> list[dict]:
 
 INJECT = """
 <style id="mm-edit-css">
-  [data-mmb]{outline:1px dashed transparent;outline-offset:2px;transition:outline-color .12s}
-  [data-mmb]:hover{outline-color:rgba(77,141,255,.55)}
-  [data-mmb]:focus,[data-mmb]:focus-within{outline:2px solid rgba(77,141,255,.9);outline-offset:2px}
+  /* Faintly outlined always, stronger on hover and focus. Invisible-until-hover
+     made a marked page and an unmarked one look identical, which is exactly the
+     wrong property for something that keeps needing to be diagnosed. */
+  [data-mmb]{
+    outline: 1px dashed rgba(77,141,255,.35) !important;
+    outline-offset: 2px;
+    transition: outline-color .12s;
+  }
+  [data-mmb]:hover{outline-color: rgba(77,141,255,.95) !important}
+  [data-mmb]:focus,[data-mmb]:focus-within{
+    outline: 2px solid rgba(77,141,255,.95) !important;
+    outline-offset: 2px;
+  }
   [contenteditable="true"]{cursor:text}
 </style>
 <script id="mm-edit-js">
