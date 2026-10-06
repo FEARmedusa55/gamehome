@@ -145,6 +145,7 @@
   }
   .tb .pal:hover{border-color:var(--accent)}
   .tb button.tiny{min-width:26px}
+  .tb button.on{background:var(--accent);border-color:var(--accent);color:#08111f}
   .tb select{
     background:#0b0e12;color:var(--text);border:1px solid var(--border-2);
     border-radius:5px;padding:3px 6px;font-size:12px;
@@ -377,7 +378,7 @@ let previewKeep = null;
 // serving an old copy of this page — the failure that has bitten repeatedly
 // here, because a stale tab asks for the preview without the edit flag and
 // nothing about it looks wrong.
-const BUILD = '2026-10-06k';
+const BUILD = '2026-10-06m';
 (function stamp() {
   const mount = () => {
     const b = document.getElementById('build');
@@ -431,7 +432,11 @@ function armPreviewScript() {
         // Original sections are in the page's model and get re-rendered; added
         // ones are not and survive. That is why made elements kept working and
         // original ones did not.
-        if (lastCount && live < lastCount && d.defaultView && d.defaultView.__mmRetag) {
+        if (d.querySelector('[data-mm-list="dirty"]')) {
+          // Joining bullets removes markers on purpose; that is not the page
+          // re-rendering itself, so there is nothing to put back.
+          f.dataset.mmstate = 'editing a list';
+        } else if (lastCount && live < lastCount && d.defaultView && d.defaultView.__mmRetag) {
           try {
             d.defaultView.__mmRetag();
             const after = d.querySelectorAll('[data-mmb]').length;
@@ -485,6 +490,12 @@ function armPreviewScript() {
 }
 
 function reloadPreview() {
+  // A list changed in the page but not saved yet would be thrown away by the
+  // reload: save it first, then reload.
+  if (dirtyLists().length) {
+    flushLists().then(() => reloadPreview());
+    return;
+  }
   const f = document.getElementById('preview');
   // Refresh the page data the preview's clicks are resolved against, so it
   // always matches the markers the reloaded page is about to carry. Left as it
@@ -1133,6 +1144,23 @@ function buildToolbar() {
   };
   tb.appendChild(boldBtn);
 
+  // Bullets on / off for the paragraph you are in. It works on any paragraph,
+  // the site's own included: a paragraph becomes a bullet (joining a list
+  // right beside it), a bullet becomes a paragraph again.
+  const listBtn = document.createElement('button');
+  listBtn.className = 'tiny';
+  listBtn.textContent = '\u2022 list';
+  listBtn.title = 'Bullet point on / off for this paragraph (then Shift+Enter adds the next bullet)';
+  listBtn.onclick = () => {
+    const a = activeBox(); if (!a) return;
+    toggleBullet(a);
+  };
+  tb.appendChild(listBtn);
+  setInterval(() => {
+    const inList = !!(active && active.box && active.box.isConnected && active.box.closest('li'));
+    listBtn.classList.toggle('on', inList);
+  }, 400);
+
   tb.appendChild(sep());
 
   const sizeSel = document.createElement('select');
@@ -1163,7 +1191,7 @@ function buildToolbar() {
 
   const hint = document.createElement('span');
   hint.className = 'tbhint';
-  hint.textContent = 'select words, then style \u00b7 Enter = new line';
+  hint.textContent = 'select words, then style \u00b7 Enter = new line \u00b7 Shift+Enter = next bullet';
   tb.appendChild(hint);
 
   // --- the section this paragraph is in ------------------------------------
@@ -1369,13 +1397,110 @@ function editablesOf(sec) {
 
 function blockFromTarget(target) {
   if (!CURRENT_DATA || !target) return null;
-  const m = /^(\d+):(\d+)$/.exec(String(target));
+  // "0:3+1" is a bullet added in the page and not saved yet: it resolves to
+  // the block it was split from ("0:3"), which locates its list, but it has no
+  // block of its own on the server — `provisional` says so.
+  const m = /^(\d+):(\d+)(\+\d+)?$/.exec(String(target));
   if (!m) return null;
   const sec = (CURRENT_DATA.sections || [])[Number(m[1])];
   if (!sec) return null;
   const blk = editablesOf(sec)[Number(m[2])];
   if (!blk) return null;
-  return { sec, block: blk };
+  return { sec, block: blk, provisional: !!m[3] };
+}
+
+// --- lists -------------------------------------------------------------------
+// A list whose shape changed in the preview (Shift+Enter, Tab, Shift+Tab,
+// Backspace) is marked data-mm-list="dirty" there and saved as a whole tree.
+
+function outermostList(el) {
+  let root = null;
+  for (let n = el; n; n = n.parentElement) if (n.tagName === 'UL' || n.tagName === 'OL') root = n;
+  return root;
+}
+
+function dirtyListOf(el) {
+  const root = el && el.isConnected ? outermostList(el) : null;
+  return root && root.getAttribute('data-mm-list') === 'dirty' ? root : null;
+}
+
+function dirtyLists() {
+  try {
+    const d = document.getElementById('preview').contentDocument;
+    return d ? [...d.querySelectorAll('[data-mm-list="dirty"]')] : [];
+  } catch (e) { return []; }
+}
+
+function listItemsOf(listEl, spanClass) {
+  const items = [];
+  [...listEl.children].forEach(li => {
+    if (li.tagName !== 'LI') return;
+    let body = [...li.children].find(c => c.tagName === 'P');
+    if (!body) {
+      body = li.cloneNode(true);
+      body.querySelectorAll('ul, ol').forEach(x => x.remove());
+    }
+    const parts = partsFromBox(body, spanClass)
+      .map(p => ({ ...p, text: (p.text || '').split('\u200b').join('') }))
+      .filter(p => p.text);
+    const sub = [...li.children].find(c => c.tagName === 'UL' || c.tagName === 'OL');
+    items.push({ parts, children: sub ? listItemsOf(sub, spanClass) : [] });
+  });
+  return items;
+}
+
+async function saveList(root, reload = true) {
+  // Any bullet that was already there locates the list on the server.
+  const anchor = [...root.querySelectorAll('[data-mmb]')]
+    .find(el => !el.getAttribute('data-mmb').includes('+'));
+  const hit = anchor && blockFromTarget(anchor.getAttribute('data-mmb'));
+  if (!hit) { toast('Could not find this list to save it \u2014 reload the preview', true); return; }
+  root.removeAttribute('data-mm-list');
+  const spanClass = hit.sec.spanClass || 'C9DxTc';
+  try {
+    status('saving list\u2026');
+    await post({ action: 'set_list', file: CURRENT, section: hit.sec.file,
+                 block: hit.block.id, spanClass, items: listItemsOf(root, spanClass) });
+    status('saved ' + new Date().toLocaleTimeString());
+  } catch (e) { toast(e.message, true); status('list save failed'); }
+  if (reload) reloadPreview();
+}
+
+// Has the paragraph been typed into since the page was loaded? Compared with
+// the text the server has for that block.
+function boxChanged(a) {
+  const server = (a.block.runs || []).map(i => (a.sec.runs[i] || {}).raw || '').join('');
+  return nodeText(a.box).split('\u200b').join('') !== server;
+}
+
+async function toggleBullet(a) {
+  if (!a.box || !a.box.isConnected) {
+    toast('Click into the paragraph again, then press \u2022 list', true);
+    return;
+  }
+  // A list changed in the page is numbered differently on the server until it
+  // is saved, so save it first and have the paragraph picked again.
+  if (a.provisional || dirtyListOf(a.box)) {
+    await flushLists();
+    reloadPreview();
+    toast('List saved \u2014 click the paragraph again, then press \u2022 list', true);
+    return;
+  }
+  try {
+    // Unsaved typing goes in first, or the toggle would rebuild the old text.
+    if (boxChanged(a)) {
+      await post({ action: 'set_block', file: a.file, section: a.sec.file, block: a.block.id,
+                   spanClass: a.sec.spanClass, parts: partsFromBox(a.box, a.sec.spanClass || 'C9DxTc') });
+    }
+    const r = await post({ action: 'toggle_list', file: a.file, section: a.sec.file, block: a.block.id });
+    toast(r.did === 'bullet on' ? 'Bullet on \u2014 Shift+Enter adds the next one' : 'Bullet off');
+    status('saved ' + new Date().toLocaleTimeString());
+    reloadPreview();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function flushLists() {
+  for (const root of dirtyLists()) await saveList(root, false);
 }
 
 // The section a "section:index" target belongs to, for widgets that are not
@@ -1393,6 +1518,8 @@ function previewEl(target) {
 }
 
 async function savePostedBlock(hit, html) {
+  // An unsaved bullet has no block of its own yet; its list saves it.
+  if (hit.provisional) return;
   // The served markup carries the editor's own attributes; strip them before
   // reading the block back as parts.
   const tmp = document.createElement('div');
@@ -1475,6 +1602,17 @@ if (d.mm === 'section') {
 }
 // A link clicked in the preview opens in a tab instead of navigating the
 // editing view out from under you.
+// A changed list was left: save it whole.
+if (d.mm === 'list') {
+  const el = previewEl(d.target);
+  const root = el && outermostList(el);
+  if (root) saveList(root);
+  return;
+}
+if (d.mm === 'list-dirty') {
+  status('list changed \u2014 it saves when you click outside it');
+  return;
+}
 if (d.mm === 'open') {
   // Web addresses only: a javascript: link in the page must not run here.
   let url = null;
@@ -1487,28 +1625,33 @@ const hit = blockFromTarget(d.target);
   const box = previewEl(d.target);
 
   if (d.mm === 'focus') {
-    active = { file: CURRENT, sec: hit.sec, block: hit.block, box, range: null };
+    active = { file: CURRENT, sec: hit.sec, block: hit.block, provisional: hit.provisional, box, range: null };
     return;
   }
   if (d.mm === 'sel') {
     // A selection inside the preview, as character offsets, so the bar can
     // style the words you picked rather than the whole paragraph.
-    active = { file: CURRENT, sec: hit.sec, block: hit.block, box,
+    active = { file: CURRENT, sec: hit.sec, block: hit.block, provisional: hit.provisional, box,
                range: { start: Number(d.start) || 0, end: Number(d.end) || 0 } };
     return;
   }
   if (d.mm === 'change') {
-    active = { file: CURRENT, sec: hit.sec, block: hit.block, box, range: null };
+    active = { file: CURRENT, sec: hit.sec, block: hit.block, provisional: hit.provisional, box, range: null };
     savePostedBlock(hit, d.html);
     return;
   }
   if (d.mm === 'move') {
-    active = { file: CURRENT, sec: hit.sec, block: hit.block, box, range: null };
+    active = { file: CURRENT, sec: hit.sec, block: hit.block, provisional: hit.provisional, box, range: null };
     movePostedBlock(hit, d.left, d.top);
   }
 });
 
 async function movePostedBlock(hit, left, top) {
+  if (hit.provisional) {
+    toast('Click outside the list to save it first, then move it', true);
+    reloadPreview();
+    return;
+  }
   try {
     status('moving\u2026');
     await post({ action: 'set_free', file: CURRENT, section: hit.sec.file,
@@ -1555,6 +1698,18 @@ async function styleBlock(file, sec, blk, box, prop, value, range) {
 }
 
 async function saveBlock(file, sec, blk, box, message, quiet) {
+  // Inside a list whose shape changed, the whole list saves instead: its
+  // blocks are numbered differently on the server until it does.
+  const root = dirtyListOf(box);
+  if (root) {
+    await saveList(root);
+    if (message) toast(message);
+    return;
+  }
+  if (!box || !box.isConnected || (active && active.provisional && active.box === box)) {
+    toast('Click into the paragraph again, then try that once more', true);
+    return;
+  }
   const parts = partsFromBox(box, sec.spanClass || 'C9DxTc');
   if (!parts.length) return;
   try {

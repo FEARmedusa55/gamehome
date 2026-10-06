@@ -19,6 +19,12 @@ Python 3.10+, standard library only — nothing to install.
   the top bar, an image to swap it. The top bar styles the selected words and
   moves, duplicates or deletes the section you are in. Alt-drag moves a block
   freely (see the note below).
+- **Bullet points** — click into any paragraph and press **• list** in the
+  top bar to make it a bullet (press again to turn it back). Then, like Word:
+  **Shift+Enter** starts the next bullet, **Tab** / **Shift+Tab** indent and
+  outdent, **Backspace** at the start of a bullet joins it to the one above,
+  and **Enter** is a new line inside the bullet. A list saves when you click
+  outside it.
 - **Undo** — reverts the last change. 30 steps are kept.
 
 When you are happy, commit and push — GitHub Pages publishes what is on `main`.
