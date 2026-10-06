@@ -287,13 +287,22 @@ background:transparent;color:inherit;border:0;border-bottom:1px solid rgba(255,2
     }, true);
   });
 
+  // "/" opens search, as on most sites — unless you are typing somewhere.
+  function slashForUs(e) {
+    return e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey &&
+      !(e.target.closest && e.target.closest('input, textarea, select, [contenteditable="true"]'));
+  }
   doc.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') { closeSearch(); setNav(false); }
-    // "/" opens search, as on most sites — unless you are typing somewhere.
-    if (e.key === '/' && !(e.target.closest && e.target.closest('input, textarea, [contenteditable="true"]'))) {
+    if (slashForUs(e)) {
       e.preventDefault();
       openSearch();
     }
-  });
+  }, true);
+  // Firefox runs its own Quick Find on "/" from the keypress, so that has to
+  // be cancelled too or the browser's find bar opens alongside ours.
+  doc.addEventListener('keypress', function (e) {
+    if (slashForUs(e)) e.preventDefault();
+  }, true);
 })();
 </script></body></html>
