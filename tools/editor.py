@@ -1159,6 +1159,12 @@ class Handler(BaseHTTPRequestHandler):
                         # for each. The page script finds the matching elements
                         # by that text — no position arithmetic on either side.
                         targets = preview_edit.targets(section_info, folder, names)
+                        # The page's own scripts only re-render what is already
+                        # in the markup, and that re-render is what kept wiping
+                        # the markers we add. Stripped, the page still looks
+                        # identical — the styling is all CSS — and nothing can
+                        # take the markers away afterwards.
+                        html = preview_edit.strip_scripts(html)
                         html = preview_edit.inject(html, targets)
                         data = html.encode("utf-8")
                         print(f"  preview edit: {page} — {len(targets)} blocks to match")

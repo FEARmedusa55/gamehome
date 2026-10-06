@@ -24,6 +24,30 @@ from __future__ import annotations
 import json
 import re
 
+SCRIPT_RE = re.compile(r"<script\b[^>]*>.*?</script\s*>", re.S | re.I)
+
+
+def strip_scripts(page_html: str) -> str:
+    """Remove the page's own scripts from an edit-mode preview.
+
+    Google Sites' bundle re-renders the sections it knows about from an internal
+    model, replacing those DOM nodes — which wipes the markers and the
+    contenteditable we set on them. That is why elements that were already on the
+    page could not be edited while newly added ones could: the added ones are not
+    in that model and are left alone. In Firefox the bundle does not even get
+    that far, throwing "_._DumpException is not a function", and the page
+    re-renders anyway.
+
+    The mirror's pages are static HTML and every bit of the styling is CSS, so
+    removing these scripts changes nothing you can see. Scripts we add ourselves
+    (ids beginning "mm-") are kept.
+    """
+    def keep(match: "re.Match") -> str:
+        head = match.group(0)[:300]
+        return match.group(0) if 'id="mm-' in head else ""
+
+    return SCRIPT_RE.sub(keep, page_html)
+
 
 def targets(section_info, page_folder, names) -> list[dict]:
     """The blocks the editor offers, as [{t: "si:bi", text: "..."}].
