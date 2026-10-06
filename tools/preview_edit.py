@@ -254,14 +254,51 @@ INJECT = """
 
   function tag(el) { return el && el.getAttribute ? el.getAttribute('data-mmb') : null; }
 
+  // Line breaks that show, and text that shows as typed.
+  //
+  // While you type, Firefox (and LibreWolf) slips <br>s into editable text
+  // that do not break the line — padding it keeps for the caret. They are
+  // invisible here, but saved as they were they became real line breaks on
+  // the site: "a console with⏎the willingness" where nothing showed in the
+  // editor. A <br> only counts when the text after it really starts a new
+  // line. Likewise a newline character inside text shows as a space unless
+  // the text keeps whitespace (pre / pre-wrap), so it is saved as a space.
+  function isBreak(br) {
+    if (!br.isConnected) return true;
+    var host = br.closest('[data-mmb]') || br.parentElement;
+    var prev = null, next = null, n;
+    var w = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+    while ((n = w.nextNode())) {
+      if (!n.nodeValue.split(String.fromCharCode(8203)).join('').trim()) continue;
+      if (br.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_PRECEDING) prev = n;
+      else { next = n; break; }
+    }
+    if (!next) return false;          // nothing after it: it shows nothing
+    if (!prev) return true;           // a break before any text: a blank first line
+    var a = document.createRange();
+    a.setStart(prev, Math.max(0, prev.nodeValue.length - 1));
+    a.setEnd(prev, prev.nodeValue.length);
+    var b = document.createRange();
+    b.setStart(next, 0);
+    b.setEnd(next, Math.min(1, next.nodeValue.length));
+    var ra = a.getClientRects(), rb = b.getClientRects();
+    if (!ra.length || !rb.length) return true;
+    return rb[0].top > ra[ra.length - 1].top + 2;
+  }
+  window.__mmIsBreak = isBreak;
+  function keepsWhitespace(t) {
+    var p = t.parentElement;
+    return !!p && /^(pre|break-spaces)/.test(getComputedStyle(p).whiteSpace);
+  }
+
   // Same notion of position as the editor's nodeText: text counts its
-  // characters and a <br> counts as one. Counting text nodes alone put every
-  // selection after a line break one letter early per break.
+  // characters and a <br> that breaks the line counts as one. Counted over the
+  // live page, not a copy, since only the page can say which breaks show.
   function textLen(node) {
     var n = 0;
     node.childNodes.forEach(function (c) {
       if (c.nodeType === 3) n += c.nodeValue.length;
-      else if (c.nodeName === 'BR') n += 1;
+      else if (c.nodeName === 'BR') n += isBreak(c) ? 1 : 0;
       else n += textLen(c);
     });
     return n;
@@ -270,17 +307,42 @@ INJECT = """
     var r = document.createRange();
     r.selectNodeContents(root);
     try { r.setEnd(node, off); } catch (e) { return textLen(root); }
-    return textLen(r.cloneContents());
+    var n = 0, x;
+    var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+    while ((x = w.nextNode())) {
+      if (x.nodeType === 3) {
+        if (x === r.endContainer) { n += Math.min(r.endOffset, x.nodeValue.length); break; }
+        if (r.comparePoint(x, x.nodeValue.length) !== 0) break;
+        n += x.nodeValue.length;
+      } else if (x.nodeName === 'BR') {
+        var at = Array.prototype.indexOf.call(x.parentNode.childNodes, x) + 1;
+        if (r.comparePoint(x.parentNode, at) !== 0) break;
+        if (isBreak(x)) n += 1;
+      }
+    }
+    return n;
   }
 
   // The block's own markup, with our attributes stripped, so the editor reads
-  // back exactly what it wrote.
+  // back exactly what it wrote — less the breaks and newlines that do not show.
   function currentHtml(el) {
+    var brs = Array.prototype.map.call(el.querySelectorAll('br'), isBreak);
+    var plain = [], t;
+    var w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    while ((t = w.nextNode())) plain.push(!keepsWhitespace(t));
     var clone = el.cloneNode(true);
     clone.querySelectorAll('[data-mmb]').forEach(function (n) {
       n.removeAttribute('data-mmb');
       n.removeAttribute('contenteditable');
     });
+    Array.prototype.forEach.call(clone.querySelectorAll('br'), function (b, i) {
+      if (brs[i] === false) b.remove();
+    });
+    var cw = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT), i = 0;
+    while ((t = cw.nextNode())) {
+      if (plain[i]) t.nodeValue = t.nodeValue.replace(/[\\r\\n]/g, ' ');
+      i++;
+    }
     return clone.innerHTML;
   }
 
@@ -545,7 +607,7 @@ INJECT = """
     var w = document.createTreeWalker(body, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
     var at = 0, n, last = null, r = document.createRange();
     while ((n = w.nextNode())) {
-      if (n.nodeType === 1) { if (n.nodeName === 'BR') at += 1; continue; }
+      if (n.nodeType === 1) { if (n.nodeName === 'BR' && isBreak(n)) at += 1; continue; }
       if (isList(n.parentElement)) continue;
       last = n;
       if (at + n.nodeValue.length >= off) { r.setStart(n, Math.max(0, off - at)); break; }
