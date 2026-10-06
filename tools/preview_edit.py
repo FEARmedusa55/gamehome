@@ -101,6 +101,8 @@ INJECT = """
   var TAGS = 'p,h1,h2,h3,h4,h5,h6,li,blockquote,td,div';
 
   function norm(s) { return (s || '').replace(/[\\r\\n]+/g, '').replace(/\\s+/g, ' ').trim(); }
+  // Whitespace removed entirely, for the fallback pass below.
+  function squash(s) { return norm(s).replace(/\\s+/g, ''); }
   function send(msg) { try { parent.postMessage(msg, '*'); } catch (e) {} }
 
   // Tagging, as a function so it can be run again later. Google Sites re-renders
@@ -130,19 +132,36 @@ INJECT = """
 
     var used = {};
     var matched = 0;
-    candidates.forEach(function (c) {
-      for (var i = 0; i < TARGETS.length; i++) {
-        var t = TARGETS[i];
-        if (used[t.t]) continue;
-        if (norm(t.text) === c.txt) {
-          used[t.t] = 1;
-          matched++;
-          c.el.setAttribute('data-mmb', t.t);
-          c.el.setAttribute('contenteditable', 'true');
-          return;
+    // Two passes: an exact normalized match first, then — only if that found
+    // nothing — a comparison with all whitespace removed.
+    //
+    // The server reads a block's text out of the markup, and that can drop a
+    // space the rendered text keeps: "(only Save the light was virus checked by
+    // hand)" against " (only Save the light…". A one-character difference is
+    // all it took for a block never to be tagged, and the original content is
+    // full of these while cleanly authored blocks have none — which is exactly
+    // why blocks that were already on the page could not be edited while newly
+    // added ones could. Exact matches are tried first so a looser comparison
+    // can never take an element an exact one would have claimed.
+    var passes = [
+      function (a, b) { return norm(a) === norm(b); },
+      function (a, b) { return squash(a) === squash(b); }
+    ];
+    for (var pi = 0; pi < passes.length; pi++) {
+      candidates.forEach(function (c) {
+        for (var i = 0; i < TARGETS.length; i++) {
+          var t = TARGETS[i];
+          if (used[t.t]) continue;
+          if (passes[pi](t.text, c.txt)) {
+            used[t.t] = 1;
+            matched++;
+            c.el.setAttribute('data-mmb', t.t);
+            c.el.setAttribute('contenteditable', 'true');
+            return;
+          }
         }
-      }
-    });
+      });
+    }
 
     // Buttons are widgets, not paragraphs, so they get their own marker rather
     // than being offered as text. Numbering is plain document order inside each
