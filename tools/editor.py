@@ -291,6 +291,39 @@ def upload_image(payload: dict) -> dict:
             "name": dest.name, "bytes": len(blob), "reused": False}
 
 
+def default_image() -> str:
+    """The picture a new Image element starts with.
+
+    Read from the template itself rather than a separate settings file, so the
+    two cannot fall out of step.
+    """
+    path = TEMPLATES / "image.html"
+    if not path.exists():
+        return ""
+    m = re.search(r'<img\b[^>]*\bsrc="([^"]*)"', read(path))
+    return m.group(1) if m else ""
+
+
+def set_default_image(src: str) -> int:
+    """Point both image element templates at a new default picture.
+
+    Both, so an Image element and an Image + text element start from the same
+    place. Returns how many templates changed.
+    """
+    changed = 0
+    for name in ("image", "image-text"):
+        path = TEMPLATES / f"{name}.html"
+        if not path.exists():
+            continue
+        html = read(path)
+        new = re.sub(r'(<img\b[^>]*?\bsrc=")[^"]*(")',
+                     lambda m: m.group(1) + src + m.group(2), html, count=1)
+        if new != html:
+            write(path, new)
+            changed += 1
+    return changed
+
+
 def rebuild(page_file: str) -> int:
     page = HERE / page_file
     html = content_mod.build_one(page, quiet=True)
@@ -536,7 +569,8 @@ def api_state() -> dict:
         cats.append({"slug": slug.lstrip("/"),
                      "label": label.lstrip("\u2004 ").lstrip("-").replace("\u200e", "").strip()})
     return {"pages": pages, "categories": cats, "undoDepth": undo_depth(),
-            "templates": template_list(), "tree": platforms_mod.nav_tree()}
+            "templates": template_list(), "tree": platforms_mod.nav_tree(),
+            "defaultImage": default_image()}
 
 
 def api_page(page_file: str) -> dict:
@@ -555,6 +589,7 @@ ACTION_LABELS = {
     "set_block": "edit paragraph",
     "set_buttons": "edit buttons",
     "set_free": "move block",
+    "set_default_image": "set default image",
     "set_style": "restyle text",
     "set_image": "swap image",
     "drop_section": "delete section",
@@ -675,6 +710,17 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
             return {"ok": False, "error": "block not found, or nothing changed"}
         write(path, new)
         return {"ok": True, "rebuilt": rebuild(page)}
+
+    if action == "set_default_image":
+        # The picture a new Image element starts with. Not a per-page setting:
+        # it changes the template, so every new element from now on uses it.
+        src = (payload.get("src") or "").strip()
+        if not src:
+            return {"ok": False, "error": "need an image src"}
+        changed = set_default_image(src)
+        if not changed:
+            return {"ok": False, "error": "no image templates to update"}
+        return {"ok": True, "changed": changed, "src": src}
 
     if action == "set_text":
         folder = ensure_staged(page)

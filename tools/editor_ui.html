@@ -161,6 +161,15 @@
   .blockbox a{color:inherit}
   .blockbox a[href]{text-decoration:underline}
 
+  /* the default image a new Image element starts with */
+  .defimg{padding:10px 16px 14px;border-top:1px solid var(--border);margin-top:10px}
+  .defimg h3{margin:0 0 8px;padding:0;font-size:11px;letter-spacing:.08em;
+             text-transform:uppercase;color:var(--muted);font-weight:700}
+  .defthumb{display:block;width:100%;max-height:110px;object-fit:contain;
+            background:#0b0e12;border:1px solid var(--border-2);border-radius:6px;
+            margin-bottom:8px}
+  .defhint{margin:8px 0 0;font-size:11px;color:var(--muted);line-height:1.45}
+
   /* the editor's own top bar: the styling controls live here, not per section */
   .topbar{
     position:sticky;top:0;z-index:30;
@@ -275,6 +284,15 @@
     <div class="addcat">
       <input type="text" id="newGroup" placeholder="New group name" />
       <button class="tiny" id="addGroup" title="Add a nav heading with no page behind it">+ group</button>
+    </div>
+
+    <div class="defimg">
+      <h3>Default image</h3>
+      <img id="defThumb" class="defthumb" alt="the picture new Image elements start with" />
+      <input type="file" id="defFile" accept="image/*" hidden />
+      <button class="tiny" id="defPick"
+              title="Choose the picture new Image elements start with">Choose image&hellip;</button>
+      <p class="defhint">New Image and Image + text elements start with this one.</p>
     </div>
   </aside>
 
@@ -501,6 +519,7 @@ function renderTree() {
 async function loadState() {
   STATE = await get('/api/state');
   renderTree();
+  showDefaultImage(STATE.defaultImage);
 
   const undoBtn = document.getElementById('undo');
   undoBtn.disabled = !STATE.undoDepth;
@@ -1465,6 +1484,48 @@ async function styleRun(file, sec, run, input, changes) {
     toast(partial ? 'Style applied to the selected text' : 'Style updated');
   } catch (e) { toast(e.message, true); }
 }
+
+// --- the default image for new Image elements ------------------------------
+// This changes the element templates, not a page: every Image element added
+// from now on starts from this picture. Existing images are untouched.
+function showDefaultImage(src) {
+  const thumb = document.getElementById('defThumb');
+  if (!thumb) return;
+  thumb.src = src || '';
+  thumb.style.display = src ? '' : 'none';
+}
+
+async function setDefaultImage(blob) {
+  if (!blob) return;
+  if (!/^image\//.test(blob.type)) { toast('That file is not an image', true); return; }
+  try {
+    const data = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('could not read that file'));
+      reader.readAsDataURL(blob);
+    });
+    const up = await post({ action: 'upload_image', name: blob.name, data });
+    await post({ action: 'set_default_image', src: up.src });
+    showDefaultImage(up.src);
+    const size = up.bytes < 1024 ? `${up.bytes} bytes`
+                                 : `${Math.round(up.bytes / 1024)} KB`;
+    toast(`New Image elements will start with ${up.name} (${size})`
+          + (up.reused ? ' — already uploaded, so no new copy' : ''));
+  } catch (e) { toast(e.message, true); }
+}
+
+(function wireDefaultImage() {
+  const mount = () => {
+    const pick = document.getElementById('defPick');
+    const file = document.getElementById('defFile');
+    if (!pick || !file) return;
+    pick.onclick = () => file.click();
+    file.onchange = () => setDefaultImage(file.files[0]);
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
+  else mount();
+})();
 
 async function replaceImage(file, sec, img, blob) {
   if (!blob) return;
