@@ -63,6 +63,14 @@ SITE_CSS = """<style id="mm-drawer-css">
    the drawer and its rows with. That script never runs here, so ours adds the
    same class (see SITE_JS). */
 html.mmNavOpen #yuynLe{overflow-y:auto;box-shadow:4px 0 24px rgba(0,0,0,.5)}
+/* The menu and search buttons sit in the top bar (the 56px strip across the
+   page) rather than floating just below it over the page's own content. */
+#s9iPrd{top:0 !important;height:56px !important}
+.RBEWZc{top:0 !important;z-index:30 !important}
+/* With the button up in the bar, the phone menu no longer needs the room
+   Google left for it (96px above the menu, 56px inside it), so it opens
+   straight under the bar. Only the drawer: the desktop sidebar never opens. */
+html.mmNavOpen #yuynLe{margin-top:56px !important;padding-top:8px !important}
 #mm-nav-back{display:none}
 html.mmNavOpen #mm-nav-back{display:block;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:69}
 /* Search */
