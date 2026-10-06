@@ -378,7 +378,7 @@ let previewKeep = null;
 // serving an old copy of this page — the failure that has bitten repeatedly
 // here, because a stale tab asks for the preview without the edit flag and
 // nothing about it looks wrong.
-const BUILD = '2026-10-06c';
+const BUILD = '2026-10-06d';
 (function stamp() {
   const mount = () => {
     const b = document.getElementById('build');
@@ -413,6 +413,7 @@ function armPreviewScript() {
   // world, so this is how the watcher reports in. data-mmstate says what it did
   // last; data-mmwatch counts its ticks.
   let ticks = 0;
+  let lastCount = 0;
   const inject = () => {
     ticks += 1;
     f.dataset.mmwatch = String(ticks);
@@ -420,10 +421,32 @@ function armPreviewScript() {
       let d = null;
       try { d = f.contentDocument; } catch (e) { f.dataset.mmstate = 'no-access'; return; }
       if (!d || !d.body) { f.dataset.mmstate = 'not-ready'; return; }
+
+      const live = d.querySelectorAll('[data-mmb]').length;
+      if (live > lastCount) lastCount = live;
+
       if (d.getElementById('mm-dbg') || d.getElementById('mm-edit-live')) {
-        f.dataset.mmstate = 'already-ok';
+        // The markers are there, but the page may have re-rendered some of its
+        // own sections and taken those markers with the replaced nodes — the
+        // readout survives that, so counting is what actually detects it.
+        // Original sections are in the page's model and get re-rendered; added
+        // ones are not and survive. That is why made elements kept working and
+        // original ones did not.
+        if (lastCount && live < lastCount && d.defaultView && d.defaultView.__mmRetag) {
+          try {
+            d.defaultView.__mmRetag();
+            const after = d.querySelectorAll('[data-mmb]').length;
+            f.dataset.mmstate = 'retagged ' + live + '->' + after;
+            if (after > lastCount) lastCount = after;
+          } catch (e) {
+            f.dataset.mmstate = 'retag-failed: ' + e;
+          }
+        } else {
+          f.dataset.mmstate = 'ok (' + live + '/' + lastCount + ')';
+        }
         return;
       }
+
       f.dataset.mmstate = 'fetching';
       fetch('mm-edit.js?file=' + encodeURIComponent(CURRENT))
         .then(r => r.json())

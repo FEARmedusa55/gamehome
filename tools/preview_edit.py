@@ -79,61 +79,83 @@ INJECT = """
   function norm(s) { return (s || '').replace(/[\\r\\n]+/g, '').replace(/\\s+/g, ' ').trim(); }
   function send(msg) { try { parent.postMessage(msg, '*'); } catch (e) {} }
 
-  // Walk the real DOM and tag whatever matches a target by text. Deepest first:
-  // a wrapper div and the paragraph inside it carry the same text, and the
-  // paragraph is the one worth editing.
-  var candidates = [];
-  document.querySelectorAll(TAGS).forEach(function (el) {
-    // Text inside a filled button is a widget, not a paragraph; rewriting it
-    // would flatten the button.
-    if (el.closest('.QmpIrf, .U26fgb, a.FKF6mc')) return;
-    var txt = norm(el.textContent);
-    if (!txt) return;
-    var depth = 0, p = el;
-    while ((p = p.parentElement)) depth++;
-    candidates.push({ el: el, txt: txt, depth: depth });
-  });
-  candidates.sort(function (a, b) { return b.depth - a.depth; });
-
-  var used = {};
-  var matched = 0;
-  candidates.forEach(function (c) {
-    for (var i = 0; i < TARGETS.length; i++) {
-      var t = TARGETS[i];
-      if (used[t.t]) continue;
-      if (norm(t.text) === c.txt) {
-        used[t.t] = 1;
-        matched++;
-        c.el.setAttribute('data-mmb', t.t);
-        c.el.setAttribute('contenteditable', 'true');
-        return;
-      }
-    }
-  });
-
-  // Buttons are widgets, not paragraphs, so they get their own marker rather
-  // than being offered as text. Numbering is plain document order inside each
-  // section, which is the order the editor's button list uses too — no text
-  // matching needed here, unlike blocks.
+  // Tagging, as a function so it can be run again later. Google Sites re-renders
+  // its own sections from its internal model, which replaces those DOM nodes and
+  // takes the markers and contenteditable with them — while sections added later
+  // are not in that model and survive. That is exactly why made elements stayed
+  // editable and original ones did not.
   //
-  // Selected by tag, not by ".yaqOzd": the class on these sections carries an
-  // invisible character after it, so the class selector matches nothing even
-  // though the element is right there. The server's regex tolerates it; CSS
-  // does not.
-  [...document.querySelectorAll('section')].forEach(function (s, si) {
-    [...s.querySelectorAll('div.QmpIrf')].forEach(function (w, k) {
-      w.setAttribute('data-mmb-btn', si + ':' + k);
-      w.style.cursor = 'pointer';
+  // Idempotent: tagging an element that is already tagged changes nothing, so
+  // the editor can call this freely whenever it sees markers go missing.
+  function retag() {
+    // Walk the real DOM and tag whatever matches a target by text. Deepest
+    // first: a wrapper div and the paragraph inside it carry the same text, and
+    // the paragraph is the one worth editing.
+    var candidates = [];
+    document.querySelectorAll(TAGS).forEach(function (el) {
+      // Text inside a filled button is a widget, not a paragraph; rewriting it
+      // would flatten the button.
+      if (el.closest('.QmpIrf, .U26fgb, a.FKF6mc')) return;
+      var txt = norm(el.textContent);
+      if (!txt) return;
+      var depth = 0, p = el;
+      while ((p = p.parentElement)) depth++;
+      candidates.push({ el: el, txt: txt, depth: depth });
     });
-    // Images get a marker too, so clicking one can offer a swap. Numbered in
-    // document order, which is the order the editor lists them in.
-    [...s.querySelectorAll('img')].forEach(function (im, k) {
-      im.setAttribute('data-mmb-img', si + ':' + k);
-      im.style.cursor = 'pointer';
+    candidates.sort(function (a, b) { return b.depth - a.depth; });
+
+    var used = {};
+    var matched = 0;
+    candidates.forEach(function (c) {
+      for (var i = 0; i < TARGETS.length; i++) {
+        var t = TARGETS[i];
+        if (used[t.t]) continue;
+        if (norm(t.text) === c.txt) {
+          used[t.t] = 1;
+          matched++;
+          c.el.setAttribute('data-mmb', t.t);
+          c.el.setAttribute('contenteditable', 'true');
+          return;
+        }
+      }
     });
-  });
-  var buttonsTagged = document.querySelectorAll('[data-mmb-btn]').length;
-  var imagesTagged = document.querySelectorAll('[data-mmb-img]').length;
+
+    // Buttons are widgets, not paragraphs, so they get their own marker rather
+    // than being offered as text. Numbering is plain document order inside each
+    // section, which is the order the editor's button list uses too — no text
+    // matching needed here, unlike blocks.
+    //
+    // Selected by tag, not by ".yaqOzd": the class on these sections carries an
+    // invisible character after it, so the class selector matches nothing even
+    // though the element is right there. The server's regex tolerates it; CSS
+    // does not.
+    [...document.querySelectorAll('section')].forEach(function (s, si) {
+      [...s.querySelectorAll('div.QmpIrf')].forEach(function (w, k) {
+        w.setAttribute('data-mmb-btn', si + ':' + k);
+        w.style.cursor = 'pointer';
+      });
+      // Images get a marker too, so clicking one can offer a swap. Numbered in
+      // document order, which is the order the editor lists them in.
+      [...s.querySelectorAll('img')].forEach(function (im, k) {
+        im.setAttribute('data-mmb-img', si + ':' + k);
+        im.style.cursor = 'pointer';
+      });
+    });
+
+    return {
+      matched: document.querySelectorAll('[data-mmb]').length,
+      buttons: document.querySelectorAll('[data-mmb-btn]').length,
+      images: document.querySelectorAll('[data-mmb-img]').length,
+    };
+  }
+
+  // The editor calls this when it notices the markers have gone.
+  window.__mmRetag = retag;
+
+  var counts = retag();
+  var matched = counts.matched;
+  var buttonsTagged = counts.buttons;
+  var imagesTagged = counts.images;
 
   var box = null;
   var dirty = false;
