@@ -14,11 +14,11 @@ Python 3.10+, standard library only — nothing to install.
 
 - **Left** — the site's pages and nav groups. `+` adds a page under a group,
   `✎` renames, `↑ ↓` reorders (the nav on every page follows), `−` removes.
-- **Middle** — the open page's sections, each paragraph as an editable box.
-  Edits save on their own a moment after you stop typing.
-- **Right** — the real page. Click a paragraph to type in it, a button to edit
-  its label and link, an image to swap it. Alt-drag moves a block freely (see
-  the note below).
+- **Right** — the real page, editable in place. Click a paragraph to type in
+  it (it saves when you click away), a button to edit its label and link in
+  the top bar, an image to swap it. The top bar styles the selected words and
+  moves, duplicates or deletes the section you are in. Alt-drag moves a block
+  freely (see the note below).
 - **Undo** — reverts the last change. 30 steps are kept.
 
 When you are happy, commit and push — GitHub Pages publishes what is on `main`.

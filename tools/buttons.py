@@ -21,6 +21,7 @@ first to the last would swallow the cell markup in between and wreck the row.
 from __future__ import annotations
 
 import re
+from html import escape, unescape
 
 # The filled-button marker. `htnAL` sets the height and `QmpIrf` the colour, so
 # a widget carrying QmpIrf is one of these buttons.
@@ -77,8 +78,11 @@ def read_buttons(html: str) -> list[dict]:
         css = style.group(1) if style else ""
         out.append({
             "i": i,
-            "label": re.sub(r"<[^>]+>", "", lab.group(1)).strip() if lab else "",
-            "href": href.group(2) if href else "",
+            # Unescaped, because the editor shows these as plain text and
+            # _relabel/_relink escape them again on the way back. Sending the
+            # escaped form turned every "&" into "&amp;amp;" on each save.
+            "label": unescape(re.sub(r"<[^>]+>", "", lab.group(1))).strip() if lab else "",
+            "href": unescape(href.group(2)) if href else "",
             "background": _prop(css, "background-color"),
             "colour": _prop(css, "color"),
             "size": _prop(css, "font-size"),
@@ -88,10 +92,16 @@ def read_buttons(html: str) -> list[dict]:
 
 def _relabel(widget: str, label: str) -> str:
     """Set the label, and keep both aria-labels in step for screen readers."""
-    from html import escape
     safe = escape(label, quote=True)
-    if LABEL.search(widget):
-        widget = LABEL.sub(lambda m: m.group(0).replace(m.group(1), safe), widget, count=1)
+    m = LABEL.search(widget)
+    if m:
+        # Replace by POSITION. str.replace(old, new) with an empty old label
+        # inserts the new one between every character of the markup, which
+        # wrecked the whole section once a label had been cleared.
+        inner = m.group(1)
+        wrap = re.fullmatch(r"(\s*<p\b[^>]*>)(.*?)(</p>\s*)", inner, re.S)
+        new_inner = wrap.group(1) + safe + wrap.group(3) if wrap else safe
+        widget = widget[:m.start(1)] + new_inner + widget[m.end(1):]
     widget = ARIA.sub(f' aria-label="{safe}"', widget)
     if TOOLTIP.search(widget):
         widget = TOOLTIP.sub(f' data-tooltip="{safe}"', widget, count=1)
@@ -99,11 +109,19 @@ def _relabel(widget: str, label: str) -> str:
 
 
 def _relink(widget: str, href: str) -> str:
-    from html import escape
+    """Set the link. Off-site links open in a new tab; links within the site don't."""
     safe = escape(href or "", quote=True)
-    if HREF.search(widget):
-        return HREF.sub(lambda m: m.group(1) + f'href="{safe}"', widget, count=1)
-    return widget
+    m = HREF.search(widget)
+    if not m:
+        return widget
+    widget = HREF.sub(lambda m: m.group(1) + f'href="{safe}"', widget, count=1)
+    a_start = widget.find("<a", m.start())
+    a_end = widget.find(">", a_start)
+    tag = widget[a_start:a_end + 1]
+    new = re.sub(r'\s(?:target|rel)="[^"]*"', "", tag)
+    if re.match(r"https?://", href or "", re.I):
+        new = new[:-1] + ' target="_blank" rel="noopener noreferrer">'
+    return widget[:a_start] + new + widget[a_end + 1:]
 
 
 def _restyle(widget: str, background: str, colour: str, size: str) -> str:
@@ -140,11 +158,12 @@ def write_buttons(html: str, items: list[dict]) -> str:
         return html
 
     originals = [html[s:e] for s, e in spans]
-    template = originals[0]
 
     built = []
-    for item in items:
-        base = template
+    for i, item in enumerate(items):
+        # Each button starts from its own markup (a new one from the last), so
+        # per-button details are not all overwritten by the first button's.
+        base = originals[min(i, len(originals) - 1)]
         base = _relabel(base, str(item.get("label") or ""))
         base = _relink(base, str(item.get("href") or ""))
         base = _restyle(base, str(item.get("background") or ""),

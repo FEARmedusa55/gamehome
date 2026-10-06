@@ -22,6 +22,7 @@ wrong by hand:
 """
 
 import argparse
+import html as htmllib
 import re
 import shutil
 import sys
@@ -140,9 +141,13 @@ def tail_files() -> list[Path]:
 
 
 def unescape(text: str) -> str:
-    return (text.replace("&#8196;", "\u2004")
-                .replace("&nbsp;", " ")
-                .replace("&amp;", "&"))
+    return htmllib.unescape(text).replace("\xa0", " ")
+
+
+def label_html(label: str) -> str:
+    """A nav label as markup. Unescaped, "Tips & <Tricks>" broke the nav on
+    every page at once, since the nav is copied into all of them."""
+    return htmllib.escape(label, quote=False)
 
 
 def nav_item_spans(html: str):
@@ -447,7 +452,7 @@ def fresh_li(donor_own: str, slug_path: str, filename: str, label: str,
     lab = LABEL_RE.search(out)
     if lab:
         prefix = LABEL_PREFIX_CHILD if child else LABEL_PREFIX
-        out = out[:lab.start(1)] + prefix + label + out[lab.end(1):]
+        out = out[:lab.start(1)] + prefix + label_html(label) + out[lab.end(1):]
     return out + "</li>"
 
 
@@ -884,7 +889,7 @@ def _relabel(html: str, slug_path: str, label: str) -> str:
     def swap(m):
         prefix = (LABEL_PREFIX_CHILD if 'data-level="2"' in m.group(1)
                   else LABEL_PREFIX)
-        return m.group(1) + prefix + label + m.group(2)
+        return m.group(1) + prefix + label_html(label) + m.group(2)
 
     return pattern.sub(swap, html, count=1)
 
@@ -967,7 +972,8 @@ def cmd_rename(args) -> int:
             if s != slug_path:
                 continue
             lab = LABEL_RE.search(own)
-            new = (own[:lab.start(1)] + LABEL_PREFIX + args.label + own[lab.end(1):])
+            new = (own[:lab.start(1)] + LABEL_PREFIX + label_html(args.label)
+                   + own[lab.end(1):])
             return html[:start] + new + tail + html[end:]
         return html
 

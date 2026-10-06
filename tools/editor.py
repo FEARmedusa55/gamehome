@@ -19,6 +19,7 @@ in this folder.
 
 import base64
 import hashlib
+import html as htmllib
 import json
 import mimetypes
 import random
@@ -120,10 +121,15 @@ def title_for(page_file: str, labels: dict | None = None) -> str:
     return TITLE_FIX.get(stem, stem.replace("-", " ").title())
 
 
-def ensure_staged(page_file: str) -> Path:
-    """Make sure the page has an extracted content/ folder."""
+def ensure_staged(page_file: str, force: bool = False) -> Path:
+    """Make sure the page has an extracted content/ folder.
+
+    force=True re-extracts even when a folder exists. A brand-new page needs
+    that: a folder left over from an older page of the same name would
+    otherwise be rebuilt over it, bringing back that page's content and nav.
+    """
     folder = CONTENT / Path(page_file).stem
-    if not (folder / "manifest.json").exists():
+    if force or not (folder / "manifest.json").exists():
         page = HERE / page_file
         import argparse
         content_mod.cmd_extract(
@@ -187,6 +193,11 @@ def section_info(folder: Path, name: str) -> dict:
 
     runs = []
     for i, (match, tag, attrs, text) in enumerate(textedit_mod.text_runs(html)):
+        pos = textedit_mod.run_pos(match)
+        # A run that IS a block (<p>plain text</p>) carries the paragraph's
+        # own styling — line height, margins. That belongs to the <p>, which
+        # set_block leaves alone, not to a span inside it.
+        own_block = tag.lower() in textedit_mod.BLOCK_TAGS
         colour = re.search(r'color:\s*([^;"]+)', attrs)
         weight = re.search(r'font-weight:\s*([^;"]+)', attrs)
         size = re.search(r'font-size:\s*([^;"]+)', attrs)
@@ -197,8 +208,10 @@ def section_info(folder: Path, name: str) -> dict:
             "tag": tag,
             # `css` and `class` are the run's own styling verbatim, which is what
             # the editor needs to render it and to send it back unchanged.
-            "css": css.group(1).strip() if css else "",
-            "class": cls.group(1).strip() if cls else "",
+            # Unescaped: the editor escapes them again when it writes them out,
+            # so an escaped value here came back double-escaped.
+            "css": htmllib.unescape(css.group(1).strip()) if css and not own_block else "",
+            "class": htmllib.unescape(cls.group(1).strip()) if cls and not own_block else "",
             "text": re.sub(r"\s+", " ", text).strip(),
             # `raw` is what the editor's box shows, so breaks must read as
             # newlines — the markup has them as <br>.
@@ -207,11 +220,11 @@ def section_info(folder: Path, name: str) -> dict:
             "color": colour.group(1).strip() if colour else "",
             "bold": weight.group(1).strip() in ("700", "bold") if weight else False,
             "size": size.group(1).strip() if size else "",
-            "href": inline_href(match.start()),
+            "href": htmllib.unescape(inline_href(pos)),
             # False for text that belongs to a button or other link container.
             # The editor shows those read-only: rewriting them through set_block
             # would flatten the button's own structure.
-            "editable": not inside_button(match.start()),
+            "editable": not inside_button(pos),
         })
 
     # One editing box per block, not per run: styling part of a line splits a
@@ -220,6 +233,8 @@ def section_info(folder: Path, name: str) -> dict:
     blocks = [
         {"id": bid, "tag": tag, "runs": idxs}
         for bid, tag, idxs in textedit_mod.group_runs(html)
+        # A block holding nothing but spaces is not a paragraph to edit.
+        if any(runs[i]["raw"].strip() for i in idxs)
     ]
 
     images = []
@@ -229,8 +244,8 @@ def section_info(folder: Path, name: str) -> dict:
         alt = re.search(r'alt="([^"]*)"', tag)
         images.append({
             "i": i,
-            "src": src.group(1) if src else "",
-            "alt": alt.group(1) if alt else "",
+            "src": htmllib.unescape(src.group(1)) if src else "",
+            "alt": htmllib.unescape(alt.group(1)) if alt else "",
         })
 
     return {
@@ -354,6 +369,39 @@ IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif"}
 def fresh_id() -> str:
     """A unique section id — new sections must not collide with their source."""
     return "h.new_" + "".join(random.choices(string.ascii_lowercase + string.digits, k=12))
+
+
+def fill_ids(html: str) -> str:
+    """Give every SECTION_ID placeholder in a template an id of its own.
+
+    The templates carry the placeholder more than once (the <section> and the
+    block inside it), and one fresh id for all of them put duplicate ids in
+    the page.
+    """
+    return re.sub("SECTION_ID", lambda m: fresh_id(), html)
+
+
+def renew_ids(html: str) -> str:
+    """Replace every h.* id in a copied section, one new id per old one.
+
+    A heading's link target "h.X_l" keeps following its heading "h.X", so the
+    pair still belongs together in the copy.
+    """
+    old = sorted(set(re.findall(r'\bid="(h\.[^"]*)"', html)), key=len)
+    new: dict[str, str] = {}
+    for ident in old:
+        base = ident[:-2] if ident.endswith("_l") else None
+        new[ident] = new[base] + "_l" if base in new else fresh_id()
+    seen: set[str] = set()
+
+    def swap(m) -> str:
+        # A repeat of an id the source already duplicated gets one of its own.
+        ident = m.group(1)
+        out = new[ident] if ident not in seen else fresh_id()
+        seen.add(ident)
+        return f'id="{out}"'
+
+    return re.sub(r'\bid="(h\.[^"]*)"', swap, html)
 
 
 def _dir_size(path: Path) -> int:
@@ -660,14 +708,17 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
         path = folder / payload["section"]
         html = textedit_mod.merge_spans(read(path))
         want = payload.get("block")
-        # Compare as strings: the id reaches us from the browser, where it has
-        # been through dataset and JSON, so it may be "17" rather than 17. An
-        # int/str comparison here silently fails to find the block, and the save
-        # is dropped.
-        target = next((s for s in textedit_mod.blocks(html) if str(s[2]) == str(want)), None)
-        if target is None:
+        # Ids are compared as strings inside run_range: the id reaches us from
+        # the browser, where it has been through dataset and JSON, so it may
+        # be "17" rather than 17.
+        #
+        # Only the block's text runs are rewritten, never its whole inside:
+        # a block can also hold widgets (a heading's copy-link button) that
+        # the editor never shows and must not delete.
+        found = textedit_mod.run_range(html, want)
+        if found is None:
             return {"ok": False, "error": f"block {want!r} not found"}
-        c_start, c_end, _bid, _tag, _open = target
+        c_start, c_end = found
 
         parts = payload.get("parts") or []
         if not parts:
@@ -816,17 +867,19 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
         if not src:
             return {"ok": False, "error": "no image chosen"}
 
-        if re.search(r'src="[^"]*"', tag):
-            new_tag = re.sub(r'src="[^"]*"', f'src="{src}"', tag, count=1)
-        else:
-            new_tag = tag[:-1].rstrip() + f' src="{src}">'
+        # Escaped, and swapped in through a function: a quote in either value
+        # would end the attribute, and a backslash in a plain replacement
+        # string is read as a regex escape.
+        def put(tag_html: str, name: str, value: str) -> str:
+            attr = f'{name}="{htmllib.escape(value, quote=True)}"'
+            if re.search(rf'\b{name}="[^"]*"', tag_html):
+                return re.sub(rf'\b{name}="[^"]*"', lambda m: attr, tag_html, count=1)
+            return tag_html[:-1].rstrip() + f" {attr}>"
 
+        new_tag = put(tag, "src", src)
         alt = payload.get("alt")
         if alt is not None:
-            if re.search(r'alt="[^"]*"', new_tag):
-                new_tag = re.sub(r'alt="[^"]*"', f'alt="{alt}"', new_tag, count=1)
-            else:
-                new_tag = new_tag[:-1].rstrip() + f' alt="{alt}">'
+            new_tag = put(new_tag, "alt", str(alt))
 
         write(path, html[:found[idx].start()] + new_tag + html[found[idx].end():])
         return {"ok": True, "rebuilt": rebuild(page), "src": src}
@@ -869,7 +922,7 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
             if not tpl.exists():
                 return {"ok": False,
                         "error": "template missing — run: python tools/make_templates.py"}
-            html = read(tpl).replace("SECTION_ID", fresh_id())
+            html = fill_ids(read(tpl))
             base = "new-section"
         else:
             src = folder / source
@@ -878,7 +931,7 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
             html = read(src)
             # Fresh id: a copy that reused its source's id would put duplicate
             # ids in the page.
-            html = re.sub(r'\bid="h\.[^"]*"', f'id="{fresh_id()}"', html)
+            html = renew_ids(html)
             base = re.sub(r"^\d+-", "", source).removesuffix(".html")
 
         name = f"{len(order):02d}-{base}.html"
@@ -1002,7 +1055,7 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
         donor = read(HERE / from_page)
         first = donor.index("<section")
         last = donor.rindex("</section>") + len("</section>")
-        blank = read(TEMPLATES / "heading-and-text.html").replace("SECTION_ID", fresh_id())
+        blank = fill_ids(read(TEMPLATES / "heading-and-text.html"))
         new_html = donor[:first] + blank + donor[last:]
         # mark the new page's OWN nav row (level 2 for a child, which
         # _set_current would miss), and clear the donor's highlight
@@ -1021,7 +1074,7 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
             order.append(filename)
         save_order(order)
 
-        ensure_staged(filename)
+        ensure_staged(filename, force=True)
         rebuild(filename)
         return {"ok": True, "page": filename}
 

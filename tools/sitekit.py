@@ -28,7 +28,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from sections import iter_sections, section_id, strip_tags  # noqa: E402
+from sections import iter_sections, section_id  # noqa: E402
 
 HERE = Path(__file__).resolve().parent.parent
 CONTENT = HERE / "content"
@@ -274,10 +274,22 @@ def current_label(html: str) -> str:
     return text.replace("\u200e", "").lstrip("\u2004 ").lstrip("-").strip()
 
 
+_BLOCKISH = re.compile(
+    r"</?(?:p|div|h[1-6]|li|ul|ol|td|tr|table|section|blockquote|br)\b[^>]*>", re.I)
+
+
+def readable(fragment: str) -> str:
+    """The text a reader sees. Inline tags join words ("G" + "oogle" is one
+    word, split across two spans); block tags and breaks separate them."""
+    text = re.sub(r"(?is)<(script|style)\b[^>]*>.*?</\1>", " ", fragment)
+    text = _BLOCKISH.sub(" ", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    return re.sub(r"\s+", " ", htmllib.unescape(text)).strip()
+
+
 def page_text(html: str) -> str:
     """All the readable text in the page's sections."""
-    text = " ".join(strip_tags(html[s:e]) for s, e, _ in iter_sections(html))
-    return re.sub(r"\s+", " ", text).strip()
+    return " ".join(readable(html[s:e]) for s, e, _ in iter_sections(html)).strip()
 
 
 def _set_meta(html: str, attr: str, name: str, value: str) -> str:
@@ -333,7 +345,7 @@ def finalize(html: str, page_file: str) -> str:
 
 def _heading(fragment: str) -> str:
     m = re.search(r"<h[1-6]\b[^>]*>(.*?)</h[1-6]>", fragment, re.S)
-    return strip_tags(m.group(1)) if m else ""
+    return readable(m.group(1)) if m else ""
 
 
 def build_search_index(pages: list[str] | None = None) -> int:
@@ -353,7 +365,7 @@ def build_search_index(pages: list[str] | None = None) -> int:
         secs = []
         for start, end, open_tag in iter_sections(html):
             fragment = html[start:end]
-            text = strip_tags(fragment)
+            text = readable(fragment)
             if not text:
                 continue
             sid = section_id(open_tag)

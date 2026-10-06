@@ -487,6 +487,15 @@ function armPreviewScript() {
 
 function reloadPreview() {
   const f = document.getElementById('preview');
+  // Refresh the page data the preview's clicks are resolved against, so it
+  // always matches the markers the reloaded page is about to carry. Left as it
+  // was, a button list edited a moment ago was sent back in its old form.
+  if (CURRENT) {
+    const file = CURRENT;
+    get('/api/page?file=' + encodeURIComponent(file))
+      .then(d => { if (CURRENT === file) CURRENT_DATA = d; })
+      .catch(() => {});
+  }
   f.src = 'about:blank';
   // If the page never reports in, say so rather than leaving a preview that
   // looks fine and silently is not editable.
@@ -910,7 +919,7 @@ function renderSection(file, sec, i, total) {
       const parts = runs.map(r => ({
         text: r.raw,
         style: r.css || '',
-        class: r.class || spanClass,
+        class: r.class || sec.spanClass || 'C9DxTc',
         href: r.href || '',
       }));
 
@@ -1209,10 +1218,18 @@ let suppressRemember = false;
 // Put the selection back over [start, end) after the box has been re-rendered,
 // so you can chain colour then bold then size on the same words.
 function selectRange(box, start, end) {
+  // ownerDocument throughout: a box in the preview lives in the iframe, and a
+  // range made by this document cannot hold that frame's nodes.
   const doc = box.ownerDocument;
-  const walker = doc.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+  // Line breaks count as one character, as in nodeText — counting text nodes
+  // alone restored the selection one letter early per break before it.
+  const walker = doc.createTreeWalker(box, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
   let at = 0, from = null, to = null, n;
   while ((n = walker.nextNode())) {
+    if (n.nodeType === 1) {
+      if (n.nodeName === 'BR') at += 1;
+      continue;
+    }
     const len = n.nodeValue.length;
     if (!from && at + len >= start) from = { node: n, offset: Math.max(start - at, 0) };
     if (at + len >= end) { to = { node: n, offset: Math.max(end - at, 0) }; break; }
@@ -1220,10 +1237,10 @@ function selectRange(box, start, end) {
   }
   if (!from || !to) return;
   try {
-    const r = document.createRange();
+    const r = doc.createRange();
     r.setStart(from.node, from.offset);
     r.setEnd(to.node, to.offset);
-    const sel = window.getSelection();
+    const sel = doc.getSelection();
     sel.removeAllRanges();
     sel.addRange(r);
   } catch (e) { /* box changed shape; leaving it unselected is fine */ }
