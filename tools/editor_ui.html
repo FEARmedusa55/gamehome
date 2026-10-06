@@ -1370,8 +1370,24 @@ window.addEventListener('message', ev => {
   if (d.mm === 'change') {
     active = { file: CURRENT, sec: hit.sec, block: hit.block, box, range: null };
     savePostedBlock(hit, d.html);
+    return;
+  }
+  if (d.mm === 'move') {
+    active = { file: CURRENT, sec: hit.sec, block: hit.block, box, range: null };
+    movePostedBlock(hit, d.left, d.top);
   }
 });
+
+async function movePostedBlock(hit, left, top) {
+  try {
+    status('moving\u2026');
+    await post({ action: 'set_free', file: CURRENT, section: hit.sec.file,
+                 block: hit.block.id, left, top });
+    toast('Moved');
+    status('saved ' + new Date().toLocaleTimeString());
+    reloadPreview();
+  } catch (e) { toast(e.message, true); status('move failed'); }
+}
 
 // The bar belongs to the chrome, not to a section, so it is built once.
 (function mountToolbar() {

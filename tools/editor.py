@@ -554,6 +554,7 @@ ACTION_LABELS = {
     "set_text": "edit text",
     "set_block": "edit paragraph",
     "set_buttons": "edit buttons",
+    "set_free": "move block",
     "set_style": "restyle text",
     "set_image": "swap image",
     "drop_section": "delete section",
@@ -651,6 +652,27 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
         new = buttons_mod.write_buttons(html, items)
         if new == html:
             return {"ok": False, "error": "no buttons found in that section"}
+        write(path, new)
+        return {"ok": True, "rebuilt": rebuild(page)}
+
+    if action == "set_free":
+        # Position a block freely, like dropping it on a page rather than
+        # leaving it in the flow. The tradeoff the site's grid imposes: an
+        # absolutely positioned block no longer pushes its neighbours around,
+        # so the section keeps a min-height and can look emptier than it did.
+        folder = ensure_staged(page)
+        path = folder / payload["section"]
+        html = read(path)
+        left, top = payload.get("left"), payload.get("top")
+        if left is None or top is None:
+            return {"ok": False, "error": "need left and top"}
+        props = {"position": "absolute",
+                 "left": f"{int(round(float(left)))}px",
+                 "top": f"{int(round(float(top)))}px",
+                 "z-index": "3"}
+        new = textedit_mod.set_block_props(html, payload.get("block"), props)
+        if new == html:
+            return {"ok": False, "error": "block not found, or nothing changed"}
         write(path, new)
         return {"ok": True, "rebuilt": rebuild(page)}
 

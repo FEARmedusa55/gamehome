@@ -173,8 +173,50 @@ INJECT = """
     send({ mm: 'change', target: tag(el), html: currentHtml(el) });
   });
 
-  // Report how many of the expected blocks we actually found, so the editor can
-  // tell a complete map from a partial one.
+  // --- moving ---------------------------------------------------------------
+  // Drag a block to put it where you want it, rather than where the grid
+  // put it. The drag is previewed locally with a transform, so nothing is
+  // written until you let go; then the offset from where it started is sent,
+  // and the editor turns that into a position.
+  var drag = null;
+
+  document.addEventListener('mousedown', function (e) {
+    var el = e.target.closest && e.target.closest('[data-mmb]');
+    if (!el) return;
+    if (e.button !== 0) return;
+    // Alt-drag moves; a plain drag inside a paragraph still selects text.
+    if (!e.altKey) return;
+    e.preventDefault();
+    var r = el.getBoundingClientRect();
+    drag = { el: el, x0: e.clientX, y0: e.clientY, left: r.left, top: r.top };
+    el.style.outline = '2px solid rgba(77,141,255,.9)';
+  });
+
+  document.addEventListener('mousemove', function (e) {
+    if (!drag) return;
+    var dx = e.clientX - drag.x0, dy = e.clientY - drag.y0;
+    drag.el.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+    drag.dx = dx; drag.dy = dy;
+  });
+
+  document.addEventListener('mouseup', function () {
+    if (!drag) return;
+    var d = drag;
+    drag = null;
+    d.el.style.outline = '';
+    d.el.style.transform = '';
+    if (!d.dx && !d.dy) return;
+    // Measure from where the drag STARTED plus how far it travelled. The
+    // transform is cleared just above, so measuring the element now would
+    // report its original place and throw the move away.
+    var pr = d.el.offsetParent ? d.el.offsetParent.getBoundingClientRect() : { left: 0, top: 0 };
+    send({ mm: 'move', target: tag(d.el),
+           left: Math.round(d.left - pr.left + d.dx),
+           top: Math.round(d.top - pr.top + d.dy) });
+  });
+
+  // Tell the editor how many of the expected blocks we found, so it can tell
+  // a complete map from a partial one.
   send({ mm: 'ready', matched: matched, expected: TARGETS.length });
 })();
 </script>

@@ -434,6 +434,49 @@ def cmd_set(args) -> int:
     return 0
 
 
+def set_block_props(html: str, block_id, props: dict) -> str:
+    """Set inline style properties on the block whose id is block_id.
+
+    Used for positioning a block freely and for restyling a button. Anchored by
+    id from the same merged scan set_block uses, so the open tag edited here is
+    the one that scan saw — no counting between two different scans.
+
+    Properties named in `props` are replaced if already present; an empty value
+    removes them. Everything else on the tag is left alone.
+    """
+    merged = merge_spans(html)
+    target = next((b for b in blocks(merged) if str(b[2]) == str(block_id)), None)
+    if target is None:
+        return html
+
+    start = target[0]
+    lt = merged.rfind("<", 0, start)
+    if lt == -1:
+        return html
+    gt = merged.find(">", lt)
+    if gt == -1 or gt > start:
+        return html
+    tag = merged[lt:gt + 1]
+    if tag.endswith("/>"):
+        return html
+
+    style = re.search(r'style="([^"]*)"', tag)
+    current = style.group(1).strip() if style else ""
+    drop = {k.strip().lower() for k in props}
+    kept = [p.strip() for p in current.split(";")
+            if p.strip() and p.split(":")[0].strip().lower() not in drop]
+    for key, value in props.items():
+        if value:
+            kept.append(f"{key}: {value}")
+    new_style = "; ".join(kept) + (";" if kept else "")
+
+    if style:
+        new_tag = tag[:style.start()] + f'style="{new_style}"' + tag[style.end():]
+    else:
+        new_tag = tag[:-1].rstrip() + f' style="{new_style}">'
+    return merged[:lt] + new_tag + merged[gt + 1:]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Edit section text in place.")
     sub = parser.add_subparsers(dest="command", required=True)
