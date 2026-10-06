@@ -1139,15 +1139,17 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
         label = (payload.get("label") or "").strip()
         if not slug or not label:
             return {"ok": False, "error": "need a slug and a new name"}
-        found = False
-        for _, _, s, _, _, _ in platforms_mod.items(read(HERE / site_pages()[0])):
-            if s == "/" + slug:
-                found = True
-                break
-        if not found:
+        # Any level of the nav. Checking only top-level entries (items()) made
+        # every sub-page rename fail with "no nav entry", though _relabel
+        # itself handles both levels.
+        if f'data-url="/{slug}"' not in read(HERE / site_pages()[0]):
             return {"ok": False, "error": f"no nav entry /{slug}"}
         platforms_mod._apply_to_all(
             lambda h: platforms_mod._relabel(h, "/" + slug, label), "nav relabel")
+        # Rebuild, so each page's title (taken from its nav label) and the
+        # search index follow the new name now rather than on the next edit.
+        for name in site_pages():
+            rebuild(name)
         return {"ok": True, "label": label}
 
     if action == "move_page":
