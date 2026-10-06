@@ -185,10 +185,26 @@ INJECT = """
       });
     });
 
+    // Sections with nothing marked in them — a spacer, an empty divider — have
+    // no text to click, so they could not be selected at all and there was no
+    // way to move or delete them. Mark the section itself so a click anywhere
+    // in it selects it.
+    var secs = document.querySelectorAll('section');
+    for (var si2 = 0; si2 < secs.length; si2++) {
+      var s = secs[si2];
+      if (s.querySelector('[data-mmb], [data-mmb-btn], [data-mmb-img]')) {
+        s.removeAttribute('data-mmb-sec');
+      } else {
+        s.setAttribute('data-mmb-sec', String(si2));
+        s.style.cursor = 'pointer';
+      }
+    }
+
     return {
       matched: document.querySelectorAll('[data-mmb]').length,
       buttons: document.querySelectorAll('[data-mmb-btn]').length,
       images: document.querySelectorAll('[data-mmb-img]').length,
+      sections: document.querySelectorAll('[data-mmb-sec]').length,
     };
   }
 
@@ -340,6 +356,15 @@ INJECT = """
   }, true);
 
   document.addEventListener('click', function (e) {
+    // An empty section — a spacer — has no blocks to click, so selecting the
+    // section itself is the only way to move or delete it.
+    var emptySec = e.target.closest && e.target.closest('[data-mmb-sec]');
+    if (emptySec && !(e.target.closest && e.target.closest('[data-mmb]'))) {
+      e.preventDefault();
+      diag('click \u2192 empty section [' + emptySec.getAttribute('data-mmb-sec') + ']');
+      send({ mm: 'section', target: emptySec.getAttribute('data-mmb-sec') });
+      return;
+    }
     // A button or an image first: both are widgets edited as fields, not text.
     var btn = e.target.closest && e.target.closest('[data-mmb-btn]');
     if (btn) {

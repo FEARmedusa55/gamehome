@@ -378,7 +378,7 @@ let previewKeep = null;
 // serving an old copy of this page — the failure that has bitten repeatedly
 // here, because a stale tab asks for the preview without the edit flag and
 // nothing about it looks wrong.
-const BUILD = '2026-10-06e';
+const BUILD = '2026-10-06f';
 (function stamp() {
   const mount = () => {
     const b = document.getElementById('build');
@@ -1333,7 +1333,20 @@ function buildToolbar() {
 
   const activeBox = () => {
     if (!active) { toast('Click into a paragraph first, then style it', true); return null; }
+    if (!active.block) {
+      toast('That is a section, not a paragraph \u2014 use the section buttons', true);
+      return null;
+    }
     return active;
+  };
+
+  // The section buttons act on whatever section is selected. That may be a
+  // section with no paragraph in it at all — a spacer, an empty divider — which
+  // is selected by clicking it directly, since there is no text to click.
+  const secBox = () => {
+    if (active && active.sec) return active;
+    toast('Click a paragraph, or an empty section, first', true);
+    return null;
   };
 
   const apply = (prop, value) => {
@@ -1444,7 +1457,16 @@ function buildToolbar() {
     o.textContent = text;
     sizeSel.appendChild(o);
   });
-  sizeSel.onchange = () => apply('font-size', sizeSel.value);
+  // A <select> fires change only when the value actually differs, so choosing 12
+  // for one paragraph and then 12 for another did nothing the second time. This
+  // is a menu of sizes, not a display of the current one — it was never synced
+  // to the block — so it resets to its label as it opens and every pick counts.
+  sizeSel.onmousedown = () => { sizeSel.value = ''; };
+  sizeSel.onchange = () => {
+    if (!sizeSel.value) return;
+    const a = activeBox(); if (!a) return;
+    apply('font-size', sizeSel.value);
+  };
   tb.appendChild(sizeSel);
 
   const hint = document.createElement('span');
@@ -1462,7 +1484,7 @@ function buildToolbar() {
   upBtn.textContent = '\u2191';
   upBtn.title = 'Move this paragraph\u2019s section earlier on the page';
   upBtn.onclick = () => {
-    const a = activeBox(); if (!a) return;
+    const a = secBox(); if (!a) return;
     move(a.file, a.sec, 'up');
   };
   tb.appendChild(upBtn);
@@ -1472,7 +1494,7 @@ function buildToolbar() {
   downBtn.textContent = '\u2193';
   downBtn.title = 'Move this paragraph\u2019s section later on the page';
   downBtn.onclick = () => {
-    const a = activeBox(); if (!a) return;
+    const a = secBox(); if (!a) return;
     move(a.file, a.sec, 'down');
   };
   tb.appendChild(downBtn);
@@ -1482,7 +1504,7 @@ function buildToolbar() {
   dupBtn.textContent = 'duplicate';
   dupBtn.title = 'Copy the whole section this paragraph is in';
   dupBtn.onclick = () => {
-    const a = activeBox(); if (!a) return;
+    const a = secBox(); if (!a) return;
     dup(a.file, a.sec);
   };
   tb.appendChild(dupBtn);
@@ -1492,7 +1514,7 @@ function buildToolbar() {
   delBtn.textContent = 'delete';
   delBtn.title = 'Delete this paragraph\u2019s section (it goes to _trash, so it can be recovered)';
   delBtn.onclick = () => {
-    const a = activeBox(); if (!a) return;
+    const a = secBox(); if (!a) return;
     drop(a.file, a.sec);
   };
   tb.appendChild(delBtn);
@@ -1718,6 +1740,18 @@ if (d.mm === 'ready') {
 }
 if (d.mm === 'button') { showButtonFields(d.target); return; }
 if (d.mm === 'image') { showImageSwap(d.target); return; }
+// A section clicked with nothing editable inside it — a spacer, an empty
+// divider. There is no block to act on, so the section itself becomes the
+// selection and the section buttons (↑ ↓ duplicate delete) work on it.
+if (d.mm === 'section') {
+  const si = Number(d.target);
+  const secs = (STATE.sections || []);
+  const s = secs[si];
+  if (!s) { toast('Could not find that section', true); return; }
+  active = { file: CURRENT, sec: s, block: null, box: null, range: null };
+  toast('Section selected (spacer) \u2014 use \u2191 \u2193 duplicate delete');
+  return;
+}
 // A link clicked in the preview opens in a tab instead of navigating the
 // editing view out from under you.
 if (d.mm === 'open') { window.open(d.href, '_blank', 'noopener,noreferrer'); return; }
