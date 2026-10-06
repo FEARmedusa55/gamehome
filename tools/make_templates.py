@@ -40,10 +40,8 @@ SOURCES = [
      "02-there-is-no-way-to.html",
      ["Write your text here."], True),
 
-    ("list", "Bullet list", "android.html",
-     "10-installation-guide-prerequisites-your-choice.html",
-     ["First item", "Second item", "Third item", "Fourth item", "Fifth item",
-      "Sixth item", "Seventh item", "Eighth item", "Ninth item", "Tenth item"], True),
+    # No "Bullet list" element: any paragraph becomes a bullet with the
+    # editor's "• list" button, which also works on the site's own text.
 
     ("links", "Link buttons", "android.html",
      "13-zarchiver-by-zdevs-split-apks.html",
@@ -65,7 +63,6 @@ SOURCES = [
 ALTERNATES = {
     "text": [("android.html", "32-important-note-as-android-phones.html"),
              ("apple-tv.html", "03-and-thats-it-thats-quite.html")],
-    "list": [("changelog.html", "12-original-reddit-megathread-warning-really.html")],
     "links": [("android.html", "11-recommended-installer-installerx-revived-by.html"),
               ("android.html", "05-adreno-mirrors-coming-soon-mali.html")],
     "spacer": [("android.html", "09-h-4908d146757e1f3d-30.html")],

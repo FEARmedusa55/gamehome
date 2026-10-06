@@ -602,7 +602,6 @@ TEMPLATE_LABELS = {
     "heading-and-text": "Heading + text",
     "note": "Note / callout",
     "text": "Text",
-    "list": "Bullet list",
     "links": "Link buttons",
     "spacer": "Spacer",
     "image": "Image",
@@ -655,6 +654,7 @@ ACTION_LABELS = {
     "set_block": "edit paragraph",
     "set_buttons": "edit buttons",
     "set_list": "edit list",
+    "toggle_list": "bullets on/off",
     "set_free": "move block",
     "set_default_image": "set default image",
     "set_image": "swap image",
@@ -714,7 +714,7 @@ def _act(payload: dict) -> dict:
     # Edits inside one page snapshot just that page. set_block — the save
     # behind every paragraph edit — used to snapshot the whole site, so each
     # one copied every page and all staged content.
-    page_scoped = action in ("set_block", "set_list", "set_buttons", "set_free",
+    page_scoped = action in ("set_block", "set_list", "toggle_list", "set_buttons", "set_free",
                              "set_image", "drop_section", "move_section", "add_section")
     if page_scoped and (not page or page not in site_pages()):
         return {"ok": False, "error": "unknown page"}
@@ -803,6 +803,19 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
             return {"ok": False, "error": "that paragraph is not in a list"}
         write(path, new)
         return {"ok": True, "rebuilt": rebuild(page)}
+
+    if action == "toggle_list":
+        # The "• list" button: a paragraph becomes a bullet (joining a list
+        # right beside it), or a bullet becomes a paragraph (splitting its
+        # list there). Works on the site's own text as well as new text.
+        folder = ensure_staged(page)
+        path = folder / payload["section"]
+        html = textedit_mod.merge_spans(read(path))
+        new, what = lists_mod.toggle(html, payload.get("block"))
+        if new is None:
+            return {"ok": False, "error": what}
+        write(path, new)
+        return {"ok": True, "did": what, "rebuilt": rebuild(page)}
 
     if action == "set_buttons":
         # Rewrite a section's buttons from a list: label, href, and optional

@@ -145,6 +145,7 @@
   }
   .tb .pal:hover{border-color:var(--accent)}
   .tb button.tiny{min-width:26px}
+  .tb button.on{background:var(--accent);border-color:var(--accent);color:#08111f}
   .tb select{
     background:#0b0e12;color:var(--text);border:1px solid var(--border-2);
     border-radius:5px;padding:3px 6px;font-size:12px;
@@ -377,7 +378,7 @@ let previewKeep = null;
 // serving an old copy of this page — the failure that has bitten repeatedly
 // here, because a stale tab asks for the preview without the edit flag and
 // nothing about it looks wrong.
-const BUILD = '2026-10-06L';
+const BUILD = '2026-10-06m';
 (function stamp() {
   const mount = () => {
     const b = document.getElementById('build');
@@ -1143,6 +1144,23 @@ function buildToolbar() {
   };
   tb.appendChild(boldBtn);
 
+  // Bullets on / off for the paragraph you are in. It works on any paragraph,
+  // the site's own included: a paragraph becomes a bullet (joining a list
+  // right beside it), a bullet becomes a paragraph again.
+  const listBtn = document.createElement('button');
+  listBtn.className = 'tiny';
+  listBtn.textContent = '\u2022 list';
+  listBtn.title = 'Bullet point on / off for this paragraph (then Shift+Enter adds the next bullet)';
+  listBtn.onclick = () => {
+    const a = activeBox(); if (!a) return;
+    toggleBullet(a);
+  };
+  tb.appendChild(listBtn);
+  setInterval(() => {
+    const inList = !!(active && active.box && active.box.isConnected && active.box.closest('li'));
+    listBtn.classList.toggle('on', inList);
+  }, 400);
+
   tb.appendChild(sep());
 
   const sizeSel = document.createElement('select');
@@ -1173,7 +1191,7 @@ function buildToolbar() {
 
   const hint = document.createElement('span');
   hint.className = 'tbhint';
-  hint.textContent = 'select words, then style \u00b7 Enter = new line';
+  hint.textContent = 'select words, then style \u00b7 Enter = new line \u00b7 Shift+Enter = next bullet';
   tb.appendChild(hint);
 
   // --- the section this paragraph is in ------------------------------------
@@ -1446,6 +1464,39 @@ async function saveList(root, reload = true) {
     status('saved ' + new Date().toLocaleTimeString());
   } catch (e) { toast(e.message, true); status('list save failed'); }
   if (reload) reloadPreview();
+}
+
+// Has the paragraph been typed into since the page was loaded? Compared with
+// the text the server has for that block.
+function boxChanged(a) {
+  const server = (a.block.runs || []).map(i => (a.sec.runs[i] || {}).raw || '').join('');
+  return nodeText(a.box).split('\u200b').join('') !== server;
+}
+
+async function toggleBullet(a) {
+  if (!a.box || !a.box.isConnected) {
+    toast('Click into the paragraph again, then press \u2022 list', true);
+    return;
+  }
+  // A list changed in the page is numbered differently on the server until it
+  // is saved, so save it first and have the paragraph picked again.
+  if (a.provisional || dirtyListOf(a.box)) {
+    await flushLists();
+    reloadPreview();
+    toast('List saved \u2014 click the paragraph again, then press \u2022 list', true);
+    return;
+  }
+  try {
+    // Unsaved typing goes in first, or the toggle would rebuild the old text.
+    if (boxChanged(a)) {
+      await post({ action: 'set_block', file: a.file, section: a.sec.file, block: a.block.id,
+                   spanClass: a.sec.spanClass, parts: partsFromBox(a.box, a.sec.spanClass || 'C9DxTc') });
+    }
+    const r = await post({ action: 'toggle_list', file: a.file, section: a.sec.file, block: a.block.id });
+    toast(r.did === 'bullet on' ? 'Bullet on \u2014 Shift+Enter adds the next one' : 'Bullet off');
+    status('saved ' + new Date().toLocaleTimeString());
+    reloadPreview();
+  } catch (e) { toast(e.message, true); }
 }
 
 async function flushLists() {
