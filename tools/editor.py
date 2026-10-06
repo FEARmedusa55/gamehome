@@ -39,6 +39,7 @@ import sections as sections_mod    # noqa: E402
 import buttons as buttons_mod      # noqa: E402
 import preview_edit               # noqa: E402
 import textedit as textedit_mod    # noqa: E402
+import sitekit                    # noqa: E402
 
 HERE = Path(__file__).resolve().parent.parent
 CONTENT = HERE / "content"
@@ -330,6 +331,9 @@ def rebuild(page_file: str) -> int:
     if html is None:
         return 0
     write(page, html)
+    # The search box reads every page's text from this file, so it has to
+    # follow each edit.
+    sitekit.build_search_index(site_pages())
     return len(html)
 
 
@@ -1003,6 +1007,13 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
         # mark the new page's OWN nav row (level 2 for a child, which
         # _set_current would miss), and clear the donor's highlight
         new_html = platforms_mod._mark_current_any(new_html, "/" + stem)
+        # The donor's <title> would otherwise come along too ("Changelog" on a
+        # brand-new Games page). The build refreshes it from the nav label; this
+        # covers a page that is not in the nav.
+        from html import escape
+        new_html = re.sub(r"<title>.*?</title>",
+                          lambda m: f"<title>{escape(label_text, quote=False)}</title>",
+                          new_html, count=1, flags=re.S)
         write(HERE / filename, new_html)
 
         order = load_order()
