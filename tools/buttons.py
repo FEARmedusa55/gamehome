@@ -110,7 +110,9 @@ def _relabel(widget: str, label: str) -> str:
 
 def _relink(widget: str, href: str) -> str:
     """Set the link. Off-site links open in a new tab; links within the site don't."""
-    safe = escape(href or "", quote=True)
+    from textedit import safe_href
+    href = safe_href(href)
+    safe = escape(href, quote=True)
     m = HREF.search(widget)
     if not m:
         return widget

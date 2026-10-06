@@ -193,6 +193,15 @@ def _attr(value: str) -> str:
                  .replace("<", "&lt;").replace(">", "&gt;"))
 
 
+def safe_href(href: str) -> str:
+    """A link target, or "" for one that would run code when clicked."""
+    href = (href or "").strip()
+    scheme = re.match(r"\s*([a-z][a-z0-9+.-]*):", re.sub(r"[\x00-\x20]", "", href), re.I)
+    if scheme and scheme.group(1).lower() in ("javascript", "vbscript", "data"):
+        return ""
+    return href
+
+
 def render_parts(parts, span_class: str = "C9DxTc") -> str:
     """Inner markup for a block, from [{text, style, href}] parts.
 
@@ -218,7 +227,7 @@ def render_parts(parts, span_class: str = "C9DxTc") -> str:
         # paragraph deleted it.
         attrs = f' class="{_attr(cls)}"' + (f' style="{_attr(style)}"' if style else "")
         inner = f"<span{attrs}>{text}</span>"
-        href = str(part.get("href") or "").strip()
+        href = safe_href(str(part.get("href") or ""))
         if href:
             # Escape the URL for an attribute, and stop the new tab handing the
             # opener window over to the target page.
@@ -228,35 +237,6 @@ def render_parts(parts, span_class: str = "C9DxTc") -> str:
             out.append(inner)
     return "".join(out)
 
-
-def _markup_offsets(raw: str, start: int, end: int) -> tuple[int, int]:
-    """Map plain-text offsets onto the same positions inside `raw`.
-
-    The editor's selection is measured against the text it displays, which has
-    breaks as newlines; the markup has them as <br>. Splitting on the wrong
-    offsets would slice into the middle of a tag.
-    """
-    out = []
-    plain_at = 0
-    i = 0
-    starts = {start, end}
-    while i <= len(raw):
-        if plain_at in starts and len(out) < 2:
-            out.append(i)
-        if i >= len(raw):
-            break
-        m = re.compile(BR).match(raw, i)
-        if m:
-            if plain_at in starts and len(out) < 2:
-                out.append(i)
-            i = m.end()
-            plain_at += 1        # a break is one character in the text form
-            continue
-        i += 1
-        plain_at += 1
-    while len(out) < 2:
-        out.append(len(raw))
-    return out[0], out[1]
 
 # Properties whose given value is the CSS initial and therefore cannot change
 # how anything renders. Google Sites scatters these in and out of style strings,
@@ -359,62 +339,6 @@ def merge_spans(html: str) -> str:
     return "".join(out)
 
 
-def set_style_props(attrs: str, color: str | None = None,
-                    bold: bool | None = None, size: str | None = None) -> str:
-    """
-    Add, update or remove inline style properties on a tag's attribute string.
-
-    Colour here is genuinely local: the site's content classes (C9DxTc, puwcIf,
-    Qnc8Te) do not appear in any stylesheet, so the inline style is the only
-    thing setting the colour. Changing it cannot affect anything else.
-
-    color="" removes the colour so the run inherits the page's text colour.
-    """
-    match = re.search(r'style="([^"]*)"', attrs)
-    props: list[list[str]] = []
-    if match:
-        for decl in match.group(1).split(";"):
-            if ":" not in decl:
-                continue
-            name, value = decl.split(":", 1)
-            name, value = name.strip(), value.strip()
-            if name and not any(p[0].lower() == name.lower() for p in props):
-                props.append([name, value])
-
-    def put(name: str, value: str) -> None:
-        for prop in props:
-            if prop[0].lower() == name.lower():
-                prop[1] = value
-                return
-        props.append([name, value])
-
-    def drop(name: str) -> None:
-        props[:] = [p for p in props if p[0].lower() != name.lower()]
-
-    if color is not None:
-        if color:
-            put("color", color)
-        else:
-            drop("color")
-    if bold is not None:
-        put("font-weight", "700" if bold else "400")
-    # Size works exactly like colour: the site sets it per run as an inline
-    # font-size (body text is 13.999pt), so a size change is just another
-    # declaration in the same style string.
-    if size is not None:
-        if size:
-            put("font-size", size)
-        else:
-            drop("font-size")
-
-    style = "; ".join(f"{name}: {value}" for name, value in props)
-    if style:
-        style += ";"
-    if match:
-        return attrs[:match.start()] + f'style="{style}"' + attrs[match.end():]
-    return f'{attrs} style="{style}"' if style else attrs
-
-
 def text_runs(html: str):
     """Yield (match, tag, attrs, text) for each leaf element holding text.
 
@@ -490,8 +414,9 @@ def cmd_set(args) -> int:
         print("\n(dry run — nothing written)")
         return 0
 
-    # Replace only the text between the tags; element, attrs and styling untouched.
-    new_html = (merged[:match.start(3)] + args.text + merged[match.end(3):])
+    # Replace only the text between the tags; element, attrs and styling
+    # untouched. Escaped, so "&" or "<" typed on the command line stays text.
+    new_html = (merged[:match.start(3)] + to_html(args.text) + merged[match.end(3):])
 
     # Keep the span merge, since it is what made the run contiguous.
     write(path, new_html)

@@ -651,12 +651,10 @@ def api_page(page_file: str) -> dict:
 
 
 ACTION_LABELS = {
-    "set_text": "edit text",
     "set_block": "edit paragraph",
     "set_buttons": "edit buttons",
     "set_free": "move block",
     "set_default_image": "set default image",
-    "set_style": "restyle text",
     "set_image": "swap image",
     "drop_section": "delete section",
     "move_section": "move section",
@@ -664,7 +662,6 @@ ACTION_LABELS = {
     "add_page": "add page",
     "add_group": "add group",
     "move_page": "reorder",
-    "add_category": "add category",
     "rename_category": "rename",
     "move_child": "move sub-page",
     "remove_category": "remove category",
@@ -681,7 +678,17 @@ LOCK = threading.RLock()
 
 def act(payload: dict) -> dict:
     with LOCK:
-        return _act(payload)
+        result = _act(payload)
+        # Every answer says how deep undo now goes, so the Undo button can
+        # follow edits made in the preview — before, it stayed disabled until
+        # something happened to reload the sidebar.
+        if isinstance(result, dict):
+            result.setdefault("undoDepth", undo_depth())
+            # Removing a page never rebuilds one, so the search index has to
+            # be refreshed here too or it keeps offering the deleted page.
+            if result.get("ok") and payload.get("action") != "upload_image":
+                sitekit.build_search_index(site_pages())
+        return result
 
 
 def _act(payload: dict) -> dict:
@@ -706,10 +713,26 @@ def _act(payload: dict) -> dict:
     # behind every paragraph edit — used to snapshot the whole site, so each
     # one copied every page and all staged content.
     page_scoped = action in ("set_block", "set_buttons", "set_free",
-                             "set_text", "set_style", "set_image", "drop_section",
-                             "move_section", "add_section")
+                             "set_image", "drop_section", "move_section", "add_section")
     if page_scoped and (not page or page not in site_pages()):
         return {"ok": False, "error": "unknown page"}
+
+    # File names arrive from the browser and are joined onto real paths, so
+    # each must be one the page actually has — "../../tools/editor.py" must not
+    # resolve to a file outside content/.
+    if page_scoped and "section" in payload:
+        if payload["section"] not in manifest_of(page)["sections"]:
+            return {"ok": False, "error": "unknown section"}
+    if action == "add_section":
+        source = payload.get("source") or "blank"
+        if source != "blank" and source not in manifest_of(page)["sections"]:
+            return {"ok": False, "error": f"section {source} not found"}
+        tpl = payload.get("template")
+        if tpl and tpl not in {t["file"] for t in template_list()}:
+            return {"ok": False, "error": "unknown template"}
+    if action == "add_page" and payload.get("from_page") \
+            and payload["from_page"] not in site_pages():
+        return {"ok": False, "error": "unknown page to copy from"}
 
     label = ACTION_LABELS[action]
     extra = payload.get("label") or payload.get("slug") or ""
@@ -808,81 +831,6 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
         if not changed:
             return {"ok": False, "error": "no image templates to update"}
         return {"ok": True, "changed": changed, "src": src}
-
-    if action == "set_text":
-        folder = ensure_staged(page)
-        path = folder / payload["section"]
-        html = textedit_mod.merge_spans(read(path))
-        runs = list(textedit_mod.text_runs(html))
-        idx = payload["index"]
-        if idx < 0 or idx >= len(runs):
-            return {"ok": False, "error": f"run {idx} out of range"}
-        match = runs[idx][0]
-        # Newlines in the box become real breaks; a raw "\n" would collapse to
-        # a space and the line break would silently vanish.
-        write(path, html[:match.start(3)] + textedit_mod.to_html(payload["text"])
-              + html[match.end(3):])
-        return {"ok": True, "rebuilt": rebuild(page)}
-
-    # -------------------------------------------------------------- styling
-    if action == "set_style":
-        folder = ensure_staged(page)
-        path = folder / payload["section"]
-        html = read(path)
-        runs = list(textedit_mod.text_runs(html))
-        idx = payload["index"]
-        if idx < 0 or idx >= len(runs):
-            return {"ok": False, "error": f"run {idx} out of range"}
-
-        match, tag, attrs, text = runs[idx]
-        color = payload.get("color")
-        bold = payload.get("bold")
-        size = payload.get("size")
-        start, end = payload.get("start"), payload.get("end")
-
-        # Selection offsets are measured in the box's text, where a break is one
-        # newline; the markup holds it as a <br>. Compare and slice in the text
-        # form, then map back onto the markup so a slice never lands inside a tag.
-        plain = textedit_mod.to_text(text)
-
-        # Whole run only when the selection really covers all of it. A selection
-        # that merely STARTS at 0 is still partial (start <= 0 alone was wrong).
-        whole = (start is None or end is None or start >= end
-                 or (start <= 0 and end >= len(plain)))
-
-        if whole:
-            new_attrs = textedit_mod.set_style_props(attrs, color=color, bold=bold, size=size)
-            write(path, html[:match.start(2)] + new_attrs + html[match.end(2):])
-        else:
-            m_start, m_end = textedit_mod._markup_offsets(text, int(start or 0), int(end or 0))
-            head, mid, tail = text[:m_start], text[m_start:m_end], text[m_end:]
-            mid_attrs = textedit_mod.set_style_props(attrs, color=color, bold=bold, size=size)
-
-            if tag.lower() == "span":
-                # split into sibling spans, so only the slice is restyled
-                parts = []
-                for chunk, use in ((head, attrs), (mid, mid_attrs), (tail, attrs)):
-                    if chunk:
-                        parts.append(f"<{tag}{use}>{chunk}</{tag}>")
-                new_html = "".join(parts)
-            else:
-                # A block (p/h2/li) must stay ONE block — splitting it would
-                # create a second heading. Style the slice with an inner span.
-                bits = []
-                if color:
-                    bits.append(f"color: {color}")
-                if bold is not None:
-                    bits.append(f"font-weight: {'700' if bold else '400'}")
-                if size:
-                    bits.append(f"font-size: {size}")
-                inner_style = f' style="{"; ".join(bits)};"' if bits else ""
-                inner = f"<span>{head}</span>" if head else ""
-                inner += f"<span{inner_style}>{mid}</span>"
-                inner += f"<span>{tail}</span>" if tail else ""
-                new_html = f"<{tag}{attrs}>{inner}</{tag}>"
-
-            write(path, html[:match.start()] + new_html + html[match.end():])
-        return {"ok": True, "rebuilt": rebuild(page)}
 
     # ---------------------------------------------------------------- images
     if action == "set_image":
@@ -1154,15 +1102,6 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
         return {"ok": True, "navFiles": sync_nav_order(order)}
 
     # ------------------------------------------------------------ categories
-    if action == "add_category":
-        import argparse
-        rc = platforms_mod.cmd_add(argparse.Namespace(
-            slug=payload["slug"],
-            label=payload.get("label") or payload["slug"],
-            after=payload.get("after", "/windows"),
-            from_page="apple-tv.html"))
-        return {"ok": rc == 0}
-
     if action == "remove_category":
         import argparse
         rc = platforms_mod.cmd_remove(argparse.Namespace(slug=payload["slug"]))
@@ -1175,11 +1114,36 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass  # keep the console clean
 
+    def _local_host(self) -> bool:
+        """Is this request addressed to the editor by its own name?
+
+        Any website you have open can send requests to 127.0.0.1. A page that
+        renames itself to point at this address (DNS rebinding) still carries
+        its own name in Host, so checking Host turns those away.
+        """
+        host = (self.headers.get("Host") or "").lower()
+        port = self.server.server_address[1]
+        return host in (f"127.0.0.1:{port}", f"localhost:{port}")
+
+    def _same_origin(self) -> bool:
+        """For changes: refuse anything sent from another site's page.
+
+        Browsers name the sending page in Origin. The editor's own requests
+        carry its own origin; a tool like curl sends none.
+        """
+        origin = self.headers.get("Origin")
+        if origin is None:
+            return True
+        port = self.server.server_address[1]
+        return origin.lower() in (f"http://127.0.0.1:{port}", f"http://localhost:{port}")
+
     def _send(self, code, body: bytes, ctype="application/json"):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        # The editor frames its own pages; no other site may frame it.
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
         self.end_headers()
         self.wfile.write(body)
 
@@ -1187,6 +1151,9 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(obj).encode("utf-8"))
 
     def do_GET(self):
+        if not self._local_host():
+            self._json({"error": "forbidden"}, 403)
+            return
         with LOCK:
             self._get()
 
@@ -1280,6 +1247,13 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "not found"}, 404)
 
     def do_POST(self):
+        # JSON only. A plain form or text/plain post is what another site can
+        # send without the browser asking first; application/json from another
+        # origin needs a preflight this server never grants.
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if not self._local_host() or not self._same_origin() or ctype != "application/json":
+            self._json({"ok": False, "error": "forbidden"}, 403)
+            return
         length = int(self.headers.get("Content-Length") or 0)
         try:
             payload = json.loads(self.rfile.read(length) or b"{}")
@@ -1296,8 +1270,19 @@ class EditorServer(ThreadingHTTPServer):
     # ThreadingHTTPServer defaults allow_reuse_address to True, which on Windows
     # lets a SECOND server bind a port that is already in use — so a stale
     # instance keeps serving old code and your new one silently does nothing.
-    # Refuse that instead.
-    allow_reuse_address = False
+    # Windows gets an exclusive bind instead.
+    #
+    # Elsewhere SO_REUSEADDR means something safer — only the closed
+    # connections a stopped server leaves behind may share the port — and
+    # without it, restarting within a minute or so of stopping failed with
+    # "port already in use".
+    allow_reuse_address = sys.platform != "win32"
+
+    def server_bind(self):
+        import socket
+        if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
 
 def main() -> int:

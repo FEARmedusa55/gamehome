@@ -212,7 +212,7 @@ def cmd_list(args) -> int:
     print(f"Nav categories (from {pages[0].name}):\n")
     for index, (_, _, slug, label, _, _) in enumerate(items(html)):
         marker = "  " if slug.startswith("/") else "? "
-        print(f"  [{index:2}] {slug:26} {label}")
+        print(f"{marker}[{index:2}] {slug:26} {label}")
 
     print(f"\n{len(pages)} pages carry this nav, plus "
           f"{len(head_files())} staged _head.html copies.")
@@ -374,7 +374,7 @@ def cmd_add(args) -> int:
             break
 
     if template is None:
-        print(f"! could not find a nav item to use as a template")
+        print("! could not find a nav item to use as a template")
         return 1
 
     label = args.label if args.label else args.slug.replace("-", " ").title()
@@ -410,7 +410,7 @@ def cmd_add(args) -> int:
     write(dest, page_html)
     print(f"  created {filename} from {source.name}")
 
-    print(f"\nDone. Next:")
+    print("\nDone. Next:")
     print(f"  python tools/content.py extract {filename}   # make it editable")
     print(f"  python tools/content.py build {filename}")
     return 0

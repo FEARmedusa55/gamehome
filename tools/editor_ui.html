@@ -43,19 +43,13 @@
      nav sidebar (.JzO0Vc{width:250px}). Matching it means an element's position
      in the preview lines up with its position beside the editor's own sidebar,
      which is what makes dragged objects translate. Do not "tidy" this number. */
-  /* The preview is the way in now, so the cards panel is out of the layout.
-     Hidden rather than deleted from the DOM: renderPage writes into #editor, so
-     removing the node would crash it for no visible gain. */
-  #editor{display:none}
   .layout{display:grid;grid-template-columns:250px 1fr;flex:1;min-height:0}
-  .layout.no-preview{grid-template-columns:250px 1fr}
   .layout > *{min-height:0}
 
   /* full screen: preview only, filling the window */
   body.fs .sitebar{display:none}
   body.fs .layout{grid-template-columns:1fr}
-  body.fs aside,
-  body.fs main{display:none}
+  body.fs aside{display:none}
   body.fs .preview{border-left:0}
 
   /* the pane itself, once the Fullscreen API has taken over */
@@ -281,7 +275,6 @@
   <div class="status" id="status"></div>
   <div class="spacer"></div>
   <button id="undo">Undo</button>
-  <button id="togglePreview">Hide preview</button>
   <button id="fullscreen">Full screen</button>
   <button id="openSite" class="primary">Open site</button>
 </header>
@@ -317,10 +310,6 @@
     </div>
   </aside>
 
-  <main id="editor">
-    <p class="empty">Pick a page on the left to start editing.</p>
-  </main>
-
   <section class="preview" id="previewPane">
     <div class="bar">
       <span id="previewName">preview</span>
@@ -349,8 +338,18 @@ async function post(payload) {
     body: JSON.stringify(payload),
   });
   const j = await r.json();
+  if (typeof j.undoDepth === 'number') setUndo(j.undoDepth);
   if (!j.ok) throw new Error(j.error || 'action failed');
   return j;
+}
+
+function setUndo(depth) {
+  const undoBtn = document.getElementById('undo');
+  if (!undoBtn) return;
+  undoBtn.disabled = !depth;
+  undoBtn.title = depth
+    ? `${depth} step${depth === 1 ? '' : 's'} available`
+    : 'Nothing to undo yet';
 }
 
 function toast(msg, isErr) {
@@ -378,7 +377,7 @@ let previewKeep = null;
 // serving an old copy of this page — the failure that has bitten repeatedly
 // here, because a stale tab asks for the preview without the edit flag and
 // nothing about it looks wrong.
-const BUILD = '2026-10-06i';
+const BUILD = '2026-10-06k';
 (function stamp() {
   const mount = () => {
     const b = document.getElementById('build');
@@ -719,11 +718,7 @@ async function loadState() {
   renderTree();
   showDefaultImage(STATE.defaultImage);
 
-  const undoBtn = document.getElementById('undo');
-  undoBtn.disabled = !STATE.undoDepth;
-  undoBtn.title = STATE.undoDepth
-    ? `${STATE.undoDepth} step${STATE.undoDepth === 1 ? '' : 's'} available`
-    : 'Nothing to undo yet';
+  setUndo(STATE.undoDepth);
 }
 
 async function selectPage(file) {
@@ -733,329 +728,8 @@ async function selectPage(file) {
   status('loading ' + file + '\u2026');
   const data = await get('/api/page?file=' + encodeURIComponent(file));
   CURRENT_DATA = data;
-  renderPage(data);
   document.getElementById('previewName').textContent = file;
   reloadPreview();
-  status('');
-}
-
-function renderPage(data) {
-  const ed = document.getElementById('editor');
-  ed.innerHTML = '';
-
-  const h = document.createElement('h2');
-  h.className = 'pagehead';
-  // A sub-page says where it lives, so the heading is never a bare "Sai".
-  const homeGroup = (STATE.tree || []).find(r =>
-    (r.children || []).some(c => c.href === data.file));
-  h.textContent = homeGroup ? `${homeGroup.label} \u00b7 ${data.title}` : data.title;
-  const sub = document.createElement('small');
-  sub.textContent = `${data.sections.length} sections \u00b7 changes save as you type`;
-  h.appendChild(sub);
-  ed.appendChild(h);
-
-  data.sections.forEach((sec, i) => ed.appendChild(renderSection(data.file, sec, i, data.sections.length)));
-}
-
-function renderSection(file, sec, i, total) {
-  const card = document.createElement('div');
-  card.className = 'sec';
-
-  const head = document.createElement('header');
-  head.innerHTML = `<span class="idx">${i}</span><span class="prev"></span>`;
-  head.querySelector('.prev').textContent = sec.preview;
-
-  const btnUp = mk('button', '\u2191', 'tiny', () => move(file, sec, 'up'));
-  btnUp.title = 'Move up'; btnUp.disabled = i === 0;
-  const btnDown = mk('button', '\u2193', 'tiny', () => move(file, sec, 'down'));
-  btnDown.title = 'Move down'; btnDown.disabled = i === total - 1;
-  // NOTE: do not name these locals `clone`/`move`/`drop` — a const of the same
-  // name shadows the global function inside the handler below and the click
-  // throws "clone is not a function".
-  const btnDup = mk('button', 'Duplicate', 'tiny', () => dup(file, sec));
-  btnDup.title = 'Copy this section (it inherits this one\'s look)';
-  const btnDel = mk('button', 'Delete', 'tiny danger', () => drop(file, sec));
-
-  head.append(btnUp, btnDown, btnDup, btnDel);
-  card.appendChild(head);
-
-  const body = document.createElement('div');
-  body.className = 'body';
-
-  // --- the filled link buttons, if this section has any -------------------
-  // Edited as a list, not as text: a button is a widget, so its label, link,
-  // order, colour and size are fields rather than an editable paragraph.
-  const buttons = sec.buttons || [];
-  if (buttons.length) {
-    const panel = document.createElement('div');
-    panel.className = 'btnpanel';
-
-    const read = () => [...panel.querySelectorAll('.btnrow')].map(r => ({
-      label: r.querySelector('.btlabel').value,
-      href: r.querySelector('.bthref').value,
-      background: r.querySelector('.btcolour').value,
-      size: r.querySelector('.btsize').value,
-    }));
-
-    const save = async (msg) => {
-      try {
-        await post({ action: 'set_buttons', file, section: sec.file, buttons: read() });
-        toast(msg);
-        reloadPreview();
-      } catch (e) { toast(e.message, true); }
-    };
-
-    const wire = (row, idx) => {
-      row.querySelector('.btup').onclick = () => {
-        const rows = [...panel.querySelectorAll('.btnrow')];
-        rows[idx - 1].before(rows[idx]);
-        save('Button moved');
-      };
-      row.querySelector('.btdown').onclick = () => {
-        const rows = [...panel.querySelectorAll('.btnrow')];
-        rows[idx + 1].after(rows[idx]);
-        save('Button moved');
-      };
-      row.querySelector('.btdel').onclick = () => { row.remove(); save('Button removed'); };
-      ['btlabel', 'bthref'].forEach(c =>
-        row.querySelector('.' + c).addEventListener('change', () => save('Button updated')));
-      row.querySelector('.btcolour').addEventListener('change', () => save('Button recoloured'));
-      row.querySelector('.btsize').addEventListener('change', () => save('Button resized'));
-    };
-
-    buttons.forEach((b, idx) => {
-      const row = document.createElement('div');
-      row.className = 'btnrow';
-
-      const up = document.createElement('button');
-      up.className = 'tiny btup'; up.textContent = '\u2191';
-      up.title = 'Move this button earlier';
-      up.disabled = idx === 0;
-
-      const down = document.createElement('button');
-      down.className = 'tiny btdown'; down.textContent = '\u2193';
-      down.title = 'Move this button later';
-      down.disabled = idx === buttons.length - 1;
-
-      const label = document.createElement('input');
-      label.className = 'btlabel';
-      label.value = b.label || '';
-      label.placeholder = 'label';
-      label.title = 'The text on the button';
-
-      const href = document.createElement('input');
-      href.className = 'bthref';
-      href.value = b.href || '';
-      href.placeholder = 'link url';
-      href.title = 'Where the button goes';
-
-      const colour = document.createElement('input');
-      colour.type = 'color';
-      colour.className = 'btcolour pal';
-      colour.title = 'Button colour';
-      colour.value = /^#[0-9a-f]{6}$/i.test(b.background || '') ? b.background : '#3c44cc';
-
-      const size = document.createElement('select');
-      size.className = 'btsize';
-      size.title = 'Button text size';
-      [['', 'size'], ['9pt', '9'], ['10pt', '10'], ['12pt', '12'],
-       ['14pt', '14'], ['18pt', '18']].forEach(([v, t]) => {
-        const o = document.createElement('option'); o.value = v; o.textContent = t; size.appendChild(o);
-      });
-      size.value = b.size || '';
-
-      const del = document.createElement('button');
-      del.className = 'tiny danger btdel'; del.textContent = '\u2212';
-      del.title = 'Remove this button';
-
-      row.append(up, down, label, href, colour, size, del);
-      wire(row, idx);
-      panel.appendChild(row);
-    });
-
-    const add = document.createElement('button');
-    add.className = 'tiny';
-    add.textContent = '+ button';
-    add.title = 'Add another button, copied from the last one';
-    add.onclick = () => {
-      const rows = [...panel.querySelectorAll('.btnrow')];
-      if (!rows.length) return;
-      const fresh = rows[rows.length - 1].cloneNode(true);
-      panel.insertBefore(fresh, add);
-      wire(fresh, rows.length);
-      save('Button added');
-    };
-    panel.appendChild(add);
-
-    body.appendChild(panel);
-  }
-
-
-
-  if (!sec.runs || !sec.runs.length) {
-    // append rather than replace: body.innerHTML would wipe the button panel
-    if (!buttons.length) {
-      const none = document.createElement('p');
-      none.className = 'empty';
-      none.textContent = 'No editable text in this section (it is an image or decoration block).';
-      body.appendChild(none);
-    }
-  } else {
-    // One box per block. sec.blocks groups the runs by the paragraph they sit
-    // in, so a paragraph that styling has split into three spans is still one
-    // box here.
-    const blocks = (sec.blocks && sec.blocks.length)
-      ? sec.blocks
-      : (sec.runs || []).map(r => ({ id: 'r' + r.i, tag: 'text', runs: [r.i] }));
-
-    blocks.forEach(blk => {
-      // Skip text that belongs to a button or other link container: it is not
-      // paragraph text, and rewriting it through set_block would flatten the
-      // button's own structure and break it.
-      const runs = (blk.runs || [])
-        .map(i => sec.runs[i])
-        .filter(r => r && r.editable !== false);
-      if (!runs.length) return;
-      const parts = runs.map(r => ({
-        text: r.raw,
-        style: r.css || '',
-        class: r.class || sec.spanClass || 'C9DxTc',
-        href: r.href || '',
-      }));
-
-      const wrap = document.createElement('div');
-      wrap.className = 'run';
-
-      const runbar = document.createElement('div');
-      runbar.className = 'runbar';
-
-      const meta = document.createElement('span');
-      meta.className = 'runmeta';
-      meta.textContent = `${blk.tag || 'text'} ${blk.id}` +
-        (parts.length > 1 ? ` \u00b7 ${parts.length} styles` : '');
-
-      const box = document.createElement('div');
-      box.className = 'blockbox';
-      box.contentEditable = 'true';
-      box.spellcheck = false;
-      box.innerHTML = partsToHtml(parts);
-      box.dataset.block = blk.id;
-      // Remember the selection WHILE the cursor is in the box. Reading it at
-      // click time is unreliable — pressing a toolbar control moves focus, and
-      // the selection can be gone by then, which would style the whole
-      // paragraph instead of the words you picked.
-      box.onfocus = () => { active = { file, sec, block: blk, box, range: null }; };
-      const rememberSel = () => {
-        // Ignore the select event our own selectRange() triggers: the browser
-        // reports that restored range from the span boundary, which reads one
-        // span to the right and would style the neighbouring words next time.
-        if (suppressRemember) return;
-        const r = boxSelection(box);
-        if (r && active && active.box === box) active.range = r;
-      };
-      ['keyup', 'mouseup', 'select'].forEach(ev => box.addEventListener(ev, rememberSel));
-      // Auto-save: write the paragraph back shortly after you stop typing, so
-      // there is nothing to remember to press. The blur save stays as a
-      // backstop, and cancels any pending timer so it cannot fire twice.
-      let typing = null;
-      box.addEventListener('input', () => {
-        status('editing\u2026');
-        clearTimeout(typing);
-        typing = setTimeout(() => saveBlock(file, sec, blk, box, null, true), 900);
-      });
-      box.onblur = () => {
-        clearTimeout(typing);
-        saveBlock(file, sec, blk, box);
-      };
-      // Enter adds a line inside the paragraph rather than inventing a new
-      // block: that keeps one paragraph as one box.
-      box.addEventListener('keydown', e => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          document.execCommand('insertLineBreak');
-        }
-      });
-
-      runbar.appendChild(meta);
-      wrap.appendChild(runbar);
-      wrap.appendChild(box);
-      body.appendChild(wrap);
-    });
-
-    // --- images in this section -------------------------------------------
-    const images = sec.images || [];
-    if (images.length) {
-      const imgbar = document.createElement('div');
-      imgbar.className = 'imgbar';
-      images.forEach(img => {
-        const cell = document.createElement('div');
-        cell.className = 'imgcell';
-
-        const thumb = document.createElement('img');
-        thumb.src = img.src || '';
-        thumb.alt = img.alt || '';
-
-        const src = document.createElement('div');
-        src.className = 'imgsrc';
-        src.textContent = (img.src || '').split('/').pop() || '(no source)';
-        src.title = img.src || '';
-
-        const picker = document.createElement('input');
-        picker.type = 'file';
-        picker.accept = 'image/*';
-        picker.hidden = true;
-        picker.onchange = () => replaceImage(file, sec, img, picker.files[0]);
-
-        const btn = document.createElement('button');
-        btn.className = 'tiny';
-        btn.textContent = 'Replace image';
-        btn.onclick = () => picker.click();
-
-        cell.append(thumb, src, btn, picker);
-        imgbar.appendChild(cell);
-      });
-      body.appendChild(imgbar);
-    }
-
-    const bar = document.createElement('div');
-    bar.style.cssText = 'margin-top:12px;display:flex;gap:8px;align-items:center';
-    const save = mk('button', 'Save section', 'primary', () => saveSection(file, sec, card));
-    const note = document.createElement('span');
-    note.style.cssText = 'color:var(--muted);font-size:12.5px';
-    note.textContent = 'writes text only \u2014 styling untouched';
-    bar.append(save, note);
-    body.appendChild(bar);
-  }
-
-  card.appendChild(body);
-  return card;
-}
-
-function mk(tag, text, cls, onclick) {
-  const b = document.createElement(tag);
-  b.textContent = text;
-  if (cls) b.className = cls;
-  if (onclick) b.onclick = onclick;
-  return b;
-}
-
-async function saveSection(file, sec, card) {
-  const areas = [...card.querySelectorAll('textarea')];
-  const changed = areas.filter(a => a.value !== a.dataset.original);
-  if (!changed.length) { toast('No changes in this section'); return; }
-
-  status('saving\u2026');
-  try {
-    for (const a of areas) {
-      if (a.value === a.dataset.original) continue;
-      await post({ action: 'set_text', file, section: sec.file, index: +a.dataset.i,
-                   text: a.value });
-      a.dataset.original = a.value;
-    }
-    card.classList.remove('dirty');
-    toast('Saved \u2014 page rebuilt');
-    reloadPreview();
-  } catch (e) { toast(e.message, true); }
   status('');
 }
 
@@ -1211,9 +885,6 @@ function boxSelection(box) {
   return { start, end: start + nodeText(r.cloneContents()).length };
 }
 
-// Set while the editor restores its own selection, so the resulting select
-// event is not mistaken for the user picking words.
-let suppressRemember = false;
 
 // Put the selection back over [start, end) after the box has been re-rendered,
 // so you can chain colour then bold then size on the same words.
@@ -1283,9 +954,7 @@ async function linkBlock(file, sec, blk, box, href, range) {
   const use = range || boxSelection(box) || { start: 0, end: whole };
   const next = linkParts(parts, use.start, use.end, href);
   box.innerHTML = partsToHtml(next);
-  suppressRemember = true;
   selectRange(box, use.start, use.end);
-  setTimeout(() => { suppressRemember = false; }, 0);
   await saveBlock(file, sec, blk, box, href ? 'Link added' : 'Link removed');
 }
 
@@ -1743,6 +1412,11 @@ async function savePostedBlock(hit, html) {
 }
 
 window.addEventListener('message', ev => {
+// Only the preview frame may drive the editor. Any other window that can
+// reach this one — a page that opened it, say — could otherwise post a
+// "change" and have it saved.
+const frame = document.getElementById('preview');
+if (!frame || ev.source !== frame.contentWindow) return;
 const d = ev.data || {};
 if (!d.mm) return;
 // The page reports what it managed to make editable. Surfacing it means the
@@ -1801,7 +1475,13 @@ if (d.mm === 'section') {
 }
 // A link clicked in the preview opens in a tab instead of navigating the
 // editing view out from under you.
-if (d.mm === 'open') { window.open(d.href, '_blank', 'noopener,noreferrer'); return; }
+if (d.mm === 'open') {
+  // Web addresses only: a javascript: link in the page must not run here.
+  let url = null;
+  try { url = new URL(String(d.href || ''), frame.contentWindow.location.href); } catch (e) {}
+  if (url && /^https?:$/.test(url.protocol)) window.open(url.href, '_blank', 'noopener,noreferrer');
+  return;
+}
 const hit = blockFromTarget(d.target);
   if (!hit) return;
   const box = previewEl(d.target);
@@ -1833,7 +1513,9 @@ async function movePostedBlock(hit, left, top) {
     status('moving\u2026');
     await post({ action: 'set_free', file: CURRENT, section: hit.sec.file,
                  block: hit.block.id, left, top });
-    toast('Moved');
+    // A pinned block keeps its pixel position at every screen width, so on a
+    // phone it can land on top of other text.
+    toast('Moved \u2014 check the page at phone width: a placed block can overlap text there');
     status('saved ' + new Date().toLocaleTimeString());
     reloadPreview();
   } catch (e) { toast(e.message, true); status('move failed'); }
@@ -1865,9 +1547,7 @@ async function styleBlock(file, sec, blk, box, prop, value, range) {
   // NOTE: no `active` here — this function is module scope, `active` belongs to
   // the per-section closure, and touching it threw a ReferenceError that
   // silently skipped the save.
-  suppressRemember = true;
   selectRange(box, use.start, use.end);
-  setTimeout(() => { suppressRemember = false; }, 0);
   await saveBlock(file, sec, blk, box,
                   use.end - use.start < whole
                     ? 'Style applied to the selected text'
@@ -1888,32 +1568,6 @@ async function saveBlock(file, sec, blk, box, message, quiet) {
     status('saved ' + new Date().toLocaleTimeString());
     if (!quiet) reloadPreview();
   } catch (e) { toast(e.message, true); status('save failed'); }
-}
-
-async function styleRun(file, sec, run, input, changes) {
-  try {
-    // If the text was edited but not saved, save it first — otherwise the
-    // selection offsets would refer to text the server doesn't have yet.
-    if (input && input.value !== input.dataset.original) {
-      await post({ action: 'set_text', file, section: sec.file, index: run.i,
-                   text: input.value });
-    }
-    const payload = { action: 'set_style', file, section: sec.file,
-                      index: run.i, ...changes };
-    let partial = false;
-    if (input) {
-      const s = Number(input.dataset.selStart ?? -1);
-      const e = Number(input.dataset.selEnd ?? -1);
-      if (s >= 0 && e > s && e - s < input.value.length) {
-        payload.start = s;
-        payload.end = e;
-        partial = true;
-      }
-    }
-    await post(payload);
-    await selectPage(file);
-    toast(partial ? 'Style applied to the selected text' : 'Style updated');
-  } catch (e) { toast(e.message, true); }
 }
 
 // --- the default image for new Image elements ------------------------------
@@ -1957,29 +1611,6 @@ async function setDefaultImage(blob) {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
   else mount();
 })();
-
-async function replaceImage(file, sec, img, blob) {
-  if (!blob) return;
-  if (!/^image\//.test(blob.type)) {
-    toast('That file is not an image', true);
-    return;
-  }
-  try {
-    const data = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = () => reject(new Error('could not read that file'));
-      reader.readAsDataURL(blob);
-    });
-    const up = await post({ action: 'upload_image', name: blob.name, data });
-    await post({ action: 'set_image', file, section: sec.file,
-                 index: img.i, src: up.src });
-    const size = up.bytes < 1024 ? `${up.bytes} bytes`
-                                 : `${Math.round(up.bytes / 1024)} KB`;
-    await selectPage(file);
-    toast(`Image replaced with ${up.name} (${size})`);
-  } catch (e) { toast(e.message, true); }
-}
 
 // Close any open Add-element menu when clicking elsewhere.
 document.addEventListener('click', () => {
@@ -2038,13 +1669,6 @@ document.getElementById('newGroup').addEventListener('keydown', e => {
 });
 document.getElementById('reloadPreview').onclick = reloadPreview;
 document.getElementById('openSite').onclick = () => window.open('index.html', '_blank');
-document.getElementById('togglePreview').onclick = (e) => {
-  const l = document.getElementById('layout');
-  l.classList.toggle('no-preview');
-  document.getElementById('previewPane').style.display =
-    l.classList.contains('no-preview') ? 'none' : 'flex';
-  e.target.textContent = l.classList.contains('no-preview') ? 'Show preview' : 'Hide preview';
-};
 
 // --- full screen -----------------------------------------------------------
 const previewPane = document.getElementById('previewPane');
@@ -2052,7 +1676,6 @@ const fsBtn = document.getElementById('fullscreen');
 
 function setFullscreenUI(on) {
   document.body.classList.toggle('fs', on);
-  if (on) document.getElementById('layout').classList.remove('no-preview');
   previewPane.style.display = on ? 'flex' : '';
   fsBtn.textContent = on ? 'Exit full screen' : 'Full screen';
   if (on) reloadPreview();
