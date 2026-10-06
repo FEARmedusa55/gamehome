@@ -200,6 +200,44 @@ INJECT = """
     return true;
   }
 
+  // A highlight that cannot be covered, and that doubles as a self-test: it is
+  // driven by targetAt, the same resolver the click uses. If the box appears on
+  // a paragraph, clicking that paragraph will work.
+  //
+  // The CSS outline on [data-mmb] is not enough on its own — Google Sites stacks
+  // its sections, and a later one paints over an earlier block's outline, so a
+  // marked paragraph can look unmarked. This box is fixed-position in the page's
+  // own coordinate space with the largest z-index there is, so it always paints.
+  var hi = document.createElement('div');
+  hi.id = 'mm-hi';
+  hi.setAttribute('aria-hidden', 'true');
+  hi.style.cssText =
+    'position:fixed;pointer-events:none;z-index:2147483647;display:none;' +
+    'border:2px solid rgba(77,141,255,.95);background:rgba(77,141,255,.10);' +
+    'border-radius:2px;box-sizing:border-box';
+  (document.body || document.documentElement).appendChild(hi);
+
+  function highlight(el) {
+    if (!el) { hi.style.display = 'none'; return; }
+    var r = el.getBoundingClientRect();
+    hi.style.display = 'block';
+    hi.style.left = (r.left - 2) + 'px';
+    hi.style.top = (r.top - 2) + 'px';
+    hi.style.width = Math.max(0, r.width) + 'px';
+    hi.style.height = Math.max(0, r.height) + 'px';
+  }
+
+  var hiTimer = null;
+  document.addEventListener('mousemove', function (e) {
+    clearTimeout(hiTimer);
+    var x = e.clientX, y = e.clientY, t = e.target;
+    hiTimer = setTimeout(function () {
+      highlight(targetAt({ target: t, clientX: x, clientY: y }));
+    }, 40);
+  }, true);
+  document.addEventListener('mouseleave', function () { highlight(null); }, true);
+  document.addEventListener('scroll', function () { highlight(box); }, true);
+
   document.addEventListener('focusin', function (e) {
     var el = e.target.closest && e.target.closest('[data-mmb]');
     if (!el) return;
