@@ -186,28 +186,47 @@ INJECT = """
 
   function pickAt(e) {
     var el = targetAt(e);
-    if (!el) return false;
+    if (!el) { diag('click at ' + e.clientX + ',' + e.clientY + ' \u2192 nothing marked'); return false; }
     if (el.hasAttribute('data-mmb-btn')) {
+      diag('click \u2192 button [' + el.getAttribute('data-mmb-btn') + ']');
       send({ mm: 'button', target: el.getAttribute('data-mmb-btn') });
       return true;
     }
     if (el.hasAttribute('data-mmb-img')) {
+      diag('click \u2192 image [' + el.getAttribute('data-mmb-img') + ']');
       send({ mm: 'image', target: el.getAttribute('data-mmb-img') });
       return true;
     }
     box = el;
+    diag('click \u2192 ' + el.tagName + ' [' + tag(el) + ']');
     send({ mm: 'focus', target: tag(el) });
     return true;
   }
 
-  // A highlight that cannot be covered, and that doubles as a self-test: it is
-  // driven by targetAt, the same resolver the click uses. If the box appears on
-  // a paragraph, clicking that paragraph will work.
-  //
-  // The CSS outline on [data-mmb] is not enough on its own — Google Sites stacks
-  // its sections, and a later one paints over an earlier block's outline, so a
-  // marked paragraph can look unmarked. This box is fixed-position in the page's
-  // own coordinate space with the largest z-index there is, so it always paints.
+  // A readout inside the page itself. Diagnosing this from the outside has
+  // failed repeatedly: the browser console cannot be seen from here, and any
+  // status line in the editor depends on messages getting out of the frame.
+  // This proves the script ran at all, and says what it is doing as you move
+  // and click, in the one place the person is already looking.
+  var dbg = document.createElement('div');
+  dbg.id = 'mm-dbg';
+  dbg.setAttribute('aria-hidden', 'true');
+  dbg.style.cssText =
+    'position:fixed;left:6px;bottom:6px;z-index:2147483647;' +
+    'background:rgba(12,15,20,.92);color:#9fd0ff;' +
+    'border:1px solid rgba(77,141,255,.55);border-radius:4px;' +
+    'font:11px/1.45 ui-monospace,Consolas,monospace;padding:3px 7px;' +
+    'pointer-events:none;max-width:70vw;white-space:pre-wrap';
+  (document.body || document.documentElement).appendChild(dbg);
+
+  function diag(line) { dbg.textContent = 'mm: ' + line; }
+  diag('script alive');
+
+  // A highlight that cannot be covered. The CSS outline on [data-mmb] is not
+  // enough on its own — Google Sites stacks its sections, and a later one paints
+  // over an earlier block's outline, so a marked paragraph can look unmarked.
+  // This box is fixed-position in the page's own coordinate space with the
+  // largest z-index there is, so it always paints.
   var hi = document.createElement('div');
   hi.id = 'mm-hi';
   hi.setAttribute('aria-hidden', 'true');
@@ -232,7 +251,10 @@ INJECT = """
     clearTimeout(hiTimer);
     var x = e.clientX, y = e.clientY, t = e.target;
     hiTimer = setTimeout(function () {
-      highlight(targetAt({ target: t, clientX: x, clientY: y }));
+      var hit = targetAt({ target: t, clientX: x, clientY: y });
+      highlight(hit);
+      diag('move ' + x + ',' + y + ' \u2192 ' +
+           (hit ? hit.tagName + ' [' + (hit.getAttribute('data-mmb') || 'widget') + ']' : 'nothing marked'));
     }, 40);
   }, true);
   document.addEventListener('mouseleave', function () { highlight(null); }, true);
@@ -364,6 +386,8 @@ INJECT = """
   // a complete map from a partial one.
   send({ mm: 'ready', matched: matched, expected: TARGETS.length,
          buttons: buttonsTagged, images: imagesTagged });
+  diag('marked ' + matched + ' of ' + TARGETS.length + ' blocks \u00b7 buttons ' +
+       buttonsTagged + ' \u00b7 images ' + imagesTagged);
 })();
 </script>
 """
