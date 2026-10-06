@@ -156,7 +156,18 @@ INJECT = """
     if (!el) return;
     box = el;
     send({ mm: 'focus', target: tag(el) });
-  });
+  }, true);
+
+  // Capture phase throughout, and mousedown as well as click. The site attaches
+  // its own handlers to these elements, and on the bubble phase ours ran last —
+  // so anything that stopped propagation, or ignored an untrusted event, meant
+  // clicking a paragraph did nothing at all.
+  document.addEventListener('mousedown', function (e) {
+    var el = e.target.closest && e.target.closest('[data-mmb]');
+    if (!el) return;
+    box = el;
+    send({ mm: 'focus', target: tag(el) });
+  }, true);
 
   document.addEventListener('click', function (e) {
     // A button or an image first: both are widgets edited as fields, not text.
@@ -187,7 +198,7 @@ INJECT = """
     // Let links inside a paragraph keep working when you hold a modifier.
     if (e.target.closest('a[href]') && (e.metaKey || e.ctrlKey)) return;
     send({ mm: 'focus', target: tag(el) });
-  });
+  }, true);
 
   document.addEventListener('input', function (e) {
     var el = e.target.closest && e.target.closest('[data-mmb]');
@@ -218,7 +229,7 @@ INJECT = """
     if (!dirty) return;          // nothing typed, nothing to save
     dirty = false;
     send({ mm: 'change', target: tag(el), html: currentHtml(el) });
-  });
+  }, true);
 
   // --- moving ---------------------------------------------------------------
   // Drag a block to put it where you want it, rather than where the grid
