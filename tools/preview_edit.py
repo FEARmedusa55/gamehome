@@ -151,6 +151,45 @@ INJECT = """
     return clone.innerHTML;
   }
 
+  // What is really under the cursor at this point, top to bottom. The site's own
+  // markup layers decorative elements over the original content — backgrounds,
+  // hover layers — so a click can land on one of those even though it looks like
+  // it is on the paragraph. That is why elements added later, which have no such
+  // layers, were editable while the original ones were not.
+  function targetAt(e) {
+    var direct = e.target.closest && e.target.closest('[data-mmb-btn], [data-mmb-img], [data-mmb]');
+    if (direct) return direct;
+    var list = [];
+    try {
+      list = document.elementsFromPoint(e.clientX, e.clientY) || [];
+    } catch (err) {
+      list = [document.elementFromPoint(e.clientX, e.clientY)];
+    }
+    for (var i = 0; i < list.length; i++) {
+      var el = list[i];
+      if (!el || !el.closest) continue;
+      var hit = el.closest('[data-mmb-btn], [data-mmb-img], [data-mmb]');
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  function pickAt(e) {
+    var el = targetAt(e);
+    if (!el) return false;
+    if (el.hasAttribute('data-mmb-btn')) {
+      send({ mm: 'button', target: el.getAttribute('data-mmb-btn') });
+      return true;
+    }
+    if (el.hasAttribute('data-mmb-img')) {
+      send({ mm: 'image', target: el.getAttribute('data-mmb-img') });
+      return true;
+    }
+    box = el;
+    send({ mm: 'focus', target: tag(el) });
+    return true;
+  }
+
   document.addEventListener('focusin', function (e) {
     var el = e.target.closest && e.target.closest('[data-mmb]');
     if (!el) return;
@@ -158,15 +197,11 @@ INJECT = """
     send({ mm: 'focus', target: tag(el) });
   }, true);
 
-  // Capture phase throughout, and mousedown as well as click. The site attaches
-  // its own handlers to these elements, and on the bubble phase ours ran last —
-  // so anything that stopped propagation, or ignored an untrusted event, meant
-  // clicking a paragraph did nothing at all.
+  // mousedown as well as click, so the paragraph takes the caret straight away.
   document.addEventListener('mousedown', function (e) {
-    var el = e.target.closest && e.target.closest('[data-mmb]');
-    if (!el) return;
-    box = el;
-    send({ mm: 'focus', target: tag(el) });
+    if (e.button !== 0) return;
+    var el = targetAt(e);
+    if (el && el.hasAttribute('data-mmb')) { box = el; }
   }, true);
 
   document.addEventListener('click', function (e) {
@@ -194,7 +229,11 @@ INJECT = """
       e.preventDefault();
       if (e.metaKey || e.ctrlKey) send({ mm: 'open', href: a.getAttribute('href') });
     }
-    if (!el) return;
+    // Fall back to what is under the point: the target may be an overlay.
+    if (!el) {
+      pickAt(e);
+      return;
+    }
     // Let links inside a paragraph keep working when you hold a modifier.
     if (e.target.closest('a[href]') && (e.metaKey || e.ctrlKey)) return;
     send({ mm: 'focus', target: tag(el) });
