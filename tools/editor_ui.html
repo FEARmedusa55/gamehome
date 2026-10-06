@@ -47,7 +47,8 @@
   .pubpanel .warnbox{background:rgba(217,163,67,.12);border:1px solid rgba(217,163,67,.4);
     border-radius:6px;padding:8px 10px;margin:0 0 10px}
   .pubpanel ul{margin:0 0 10px;padding-left:18px}
-  .pubpanel input{width:100%;box-sizing:border-box;margin:0 0 10px}
+  .pubpanel input, .pubpanel textarea{width:100%;box-sizing:border-box;margin:0 0 10px}
+  .pubpanel textarea{min-height:0;font-size:13.5px;line-height:1.45;resize:vertical}
   .pubpanel .row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
   .pubpanel .result{border-radius:6px;padding:8px 10px;margin-top:6px}
   .pubpanel .result.good{background:rgba(67,181,129,.14);border:1px solid rgba(67,181,129,.45)}
@@ -407,7 +408,7 @@ let previewKeep = null;
 // serving an old copy of this page — the failure that has bitten repeatedly
 // here, because a stale tab asks for the preview without the edit flag and
 // nothing about it looks wrong.
-const BUILD = '2026-10-06o';
+const BUILD = '2026-10-06p';
 (function stamp() {
   const mount = () => {
     const b = document.getElementById('build');
@@ -998,6 +999,26 @@ async function linkBlock(file, sec, blk, box, href, range) {
   await saveBlock(file, sec, blk, box, href ? 'Link added' : 'Link removed');
 }
 
+// Is every character in [start, end) of the box drawn bold? Line breaks count
+// as one character, as in nodeText.
+function looksBold(box, range) {
+  if (!box || !range) return false;
+  const win = box.ownerDocument.defaultView;
+  const walker = box.ownerDocument.createTreeWalker(box, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  let at = 0, n, touched = 0;
+  while ((n = walker.nextNode())) {
+    if (n.nodeType === 1) { if (n.nodeName === 'BR') at += 1; continue; }
+    const len = n.nodeValue.length;
+    if (at < range.end && at + len > range.start && n.nodeValue.trim()) {
+      touched++;
+      const w = win.getComputedStyle(n.parentElement).fontWeight;
+      if ((parseInt(w, 10) || (w === 'bold' ? 700 : 400)) < 600) return false;
+    }
+    at += len;
+  }
+  return touched > 0;
+}
+
 // --- the styling bar ------------------------------------------------------
 // ONE bar for the whole editor, at the top, like a word processor's, instead
 // of one per section. It acts on whichever paragraph you are in and the words
@@ -1158,18 +1179,14 @@ function buildToolbar() {
   boldBtn.onclick = () => {
     const c = covered(); if (!c) return;
     // A toggle, like any rich text editor: if everything the selection covers
-    // is already bold, this click removes it instead.
-    let at = 0, allBold = true, touched = 0;
-    for (const p of c.parts) {
-      const a2 = Math.max(c.range.start - at, 0);
-      const b2 = Math.min(c.range.end - at, (p.text || '').length);
-      if (a2 < b2) {
-        touched++;
-        if (!/font-weight:\s*(700|bold)/i.test(p.style || '')) allBold = false;
-      }
-      at += (p.text || '').length;
-    }
-    apply('font-weight', (touched && allBold) ? '' : '700');
+    // already LOOKS bold, this click makes it normal weight instead.
+    //
+    // Judged by how the text is drawn, not by its own style: a heading is
+    // bold from the site's stylesheet with no font-weight of its own, so the
+    // old check called it "not bold", the click set bold (no visible change),
+    // and the next click only removed that again — it could never be unbolded.
+    // For the same reason "off" is an explicit 400, which beats the heading's.
+    apply('font-weight', looksBold(active.box, c.range) ? '400' : '700');
   };
   tb.appendChild(boldBtn);
 
@@ -1890,6 +1907,9 @@ document.addEventListener('fullscreenchange', () => {
 let PUB = null;
 let pubBusy = false;
 let pubResult = null;
+// The note being typed, kept outside the panel: the panel redraws itself
+// (every 30 seconds, to keep the count current) and that wiped the box.
+let pubNoteText = '';
 const pubBtn = document.getElementById('publish');
 const pubPanel = document.getElementById('pubPanel');
 
@@ -1925,7 +1945,7 @@ function pubRender() {
         (P.pages.length ? P.pages.map(f => ((STATE.pages || []).find(x => x.file === f) || {}).title || f)
                         : [`${P.changed} file${P.changed === 1 ? '' : 's'}`])
           .map(x => `<li>${escText(x)}</li>`).join('') + '</ul>';
-      html += '<input type="text" id="pubNote" placeholder="What did you change? (optional)">';
+      html += '<textarea id="pubNote" rows="3" placeholder="What did you change? (optional \u2014 any length)"></textarea>';
     } else if (P.ahead) {
       html += '<p>Saved changes are waiting to be uploaded.</p>';
     } else {
@@ -1939,6 +1959,11 @@ function pubRender() {
   }
   if (pubResult) html += `<div class="result ${pubResult.ok ? 'good' : 'bad'}">${escText(pubResult.text)}</div>`;
   body.innerHTML = html;
+  const noteBox = document.getElementById('pubNote');
+  if (noteBox) {
+    noteBox.value = pubNoteText;
+    noteBox.oninput = () => { pubNoteText = noteBox.value; };
+  }
   const go = document.getElementById('pubGo');
   if (go) go.onclick = () => pubRun('publish');
   const pull = document.getElementById('pubPull');
@@ -1949,7 +1974,7 @@ function pubRender() {
 
 async function pubRun(kind) {
   if (pubBusy) return;
-  const note = (document.getElementById('pubNote') || {}).value || '';
+  const note = pubNoteText;
   pubBusy = kind;
   pubResult = null;
   pubRender();
@@ -1958,6 +1983,7 @@ async function pubRun(kind) {
     await flushLists();
     const action = kind === 'publish' ? 'publish' : kind === 'pull' ? 'git_update' : 'git_main';
     const r = await post({ action, note });
+    if (kind === 'publish' && r.did === 'published') pubNoteText = '';
     pubResult = { ok: true, text: r.message + (r.undoCleared ? ' (Undo history was cleared, since the files changed.)' : '') };
     if (r.pulled || r.reload) {
       await loadState();
@@ -1978,7 +2004,11 @@ pubBtn.onclick = () => {
 };
 document.getElementById('pubClose').onclick = () => { pubPanel.hidden = true; };
 // Keep the count on the button roughly current.
-setInterval(() => { if (!pubBusy) pubRefresh(); }, 30000);
+setInterval(() => {
+  // Never redraw under someone typing their note.
+  const typing = document.activeElement && document.activeElement.id === 'pubNote';
+  if (!pubBusy && !typing) pubRefresh();
+}, 30000);
 
 loadState().catch(e => toast(e.message, true));
 pubRefresh();

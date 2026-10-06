@@ -153,6 +153,15 @@ def _pull(branch: str) -> bool:
     return _git("rev-parse", "HEAD").stdout.strip() != before
 
 
+def _title_from(note: str, limit: int = 72) -> str:
+    """A short title from the note's first line, cut at a word, with "…"."""
+    first = note.splitlines()[0].strip()
+    if len(first) <= limit:
+        return first
+    cut = first[:limit - 1].rsplit(" ", 1)[0] or first[:limit - 1]
+    return cut.rstrip(" ,.;:-") + "…"
+
+
 def publish(note: str = "") -> dict:
     problem = _available()
     if problem:
@@ -162,10 +171,17 @@ def publish(note: str = "") -> dict:
     committed = False
     if paths:
         pages = _pages(paths)
-        title = (note or "").strip().splitlines()[0][:72] if (note or "").strip() else \
-            "Update " + (", ".join(p.removesuffix(".html") for p in pages[:3]) or "site") + \
-            (" and more" if len(pages) > 3 else "")
-        body = f"Published from the site editor, {datetime.now():%Y-%m-%d %H:%M}."
+        note = (note or "").strip()
+        if note:
+            title = _title_from(note)
+        else:
+            title = ("Update " + (", ".join(p.removesuffix(".html") for p in pages[:3]) or "site")
+                     + (" and more" if len(pages) > 3 else ""))
+        # The whole note is kept: a long one used to be cut to its first 72
+        # characters with the rest thrown away. The title is the short form
+        # GitHub lists; the full message is the commit's description.
+        body = note + "\n\n" if note and note != title else ""
+        body += f"Published from the site editor, {datetime.now():%Y-%m-%d %H:%M}."
         if pages:
             body += "\n\nPages: " + ", ".join(pages)
         _git("add", "-A")
