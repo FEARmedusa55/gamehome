@@ -19,6 +19,7 @@ in this folder.
 
 import base64
 import hashlib
+import html as htmllib
 import json
 import mimetypes
 import random
@@ -39,6 +40,7 @@ import sections as sections_mod    # noqa: E402
 import buttons as buttons_mod      # noqa: E402
 import preview_edit               # noqa: E402
 import textedit as textedit_mod    # noqa: E402
+import sitekit                    # noqa: E402
 
 HERE = Path(__file__).resolve().parent.parent
 CONTENT = HERE / "content"
@@ -119,10 +121,15 @@ def title_for(page_file: str, labels: dict | None = None) -> str:
     return TITLE_FIX.get(stem, stem.replace("-", " ").title())
 
 
-def ensure_staged(page_file: str) -> Path:
-    """Make sure the page has an extracted content/ folder."""
+def ensure_staged(page_file: str, force: bool = False) -> Path:
+    """Make sure the page has an extracted content/ folder.
+
+    force=True re-extracts even when a folder exists. A brand-new page needs
+    that: a folder left over from an older page of the same name would
+    otherwise be rebuilt over it, bringing back that page's content and nav.
+    """
     folder = CONTENT / Path(page_file).stem
-    if not (folder / "manifest.json").exists():
+    if force or not (folder / "manifest.json").exists():
         page = HERE / page_file
         import argparse
         content_mod.cmd_extract(
@@ -186,6 +193,11 @@ def section_info(folder: Path, name: str) -> dict:
 
     runs = []
     for i, (match, tag, attrs, text) in enumerate(textedit_mod.text_runs(html)):
+        pos = textedit_mod.run_pos(match)
+        # A run that IS a block (<p>plain text</p>) carries the paragraph's
+        # own styling — line height, margins. That belongs to the <p>, which
+        # set_block leaves alone, not to a span inside it.
+        own_block = tag.lower() in textedit_mod.BLOCK_TAGS
         colour = re.search(r'color:\s*([^;"]+)', attrs)
         weight = re.search(r'font-weight:\s*([^;"]+)', attrs)
         size = re.search(r'font-size:\s*([^;"]+)', attrs)
@@ -196,8 +208,10 @@ def section_info(folder: Path, name: str) -> dict:
             "tag": tag,
             # `css` and `class` are the run's own styling verbatim, which is what
             # the editor needs to render it and to send it back unchanged.
-            "css": css.group(1).strip() if css else "",
-            "class": cls.group(1).strip() if cls else "",
+            # Unescaped: the editor escapes them again when it writes them out,
+            # so an escaped value here came back double-escaped.
+            "css": htmllib.unescape(css.group(1).strip()) if css and not own_block else "",
+            "class": htmllib.unescape(cls.group(1).strip()) if cls and not own_block else "",
             "text": re.sub(r"\s+", " ", text).strip(),
             # `raw` is what the editor's box shows, so breaks must read as
             # newlines — the markup has them as <br>.
@@ -206,11 +220,11 @@ def section_info(folder: Path, name: str) -> dict:
             "color": colour.group(1).strip() if colour else "",
             "bold": weight.group(1).strip() in ("700", "bold") if weight else False,
             "size": size.group(1).strip() if size else "",
-            "href": inline_href(match.start()),
+            "href": htmllib.unescape(inline_href(pos)),
             # False for text that belongs to a button or other link container.
             # The editor shows those read-only: rewriting them through set_block
             # would flatten the button's own structure.
-            "editable": not inside_button(match.start()),
+            "editable": not inside_button(pos),
         })
 
     # One editing box per block, not per run: styling part of a line splits a
@@ -219,6 +233,8 @@ def section_info(folder: Path, name: str) -> dict:
     blocks = [
         {"id": bid, "tag": tag, "runs": idxs}
         for bid, tag, idxs in textedit_mod.group_runs(html)
+        # A block holding nothing but spaces is not a paragraph to edit.
+        if any(runs[i]["raw"].strip() for i in idxs)
     ]
 
     images = []
@@ -228,8 +244,8 @@ def section_info(folder: Path, name: str) -> dict:
         alt = re.search(r'alt="([^"]*)"', tag)
         images.append({
             "i": i,
-            "src": src.group(1) if src else "",
-            "alt": alt.group(1) if alt else "",
+            "src": htmllib.unescape(src.group(1)) if src else "",
+            "alt": htmllib.unescape(alt.group(1)) if alt else "",
         })
 
     return {
@@ -330,6 +346,9 @@ def rebuild(page_file: str) -> int:
     if html is None:
         return 0
     write(page, html)
+    # The search box reads every page's text from this file, so it has to
+    # follow each edit.
+    sitekit.build_search_index(site_pages())
     return len(html)
 
 
@@ -338,7 +357,7 @@ def rebuild(page_file: str) -> int:
 # ---------------------------------------------------------------------------
 
 UNDO = HERE / "_undo"
-UNDO_LIMIT = 8            # snapshots kept
+UNDO_LIMIT = 30           # snapshots kept
 UNDO_MAX_BYTES = 400_000_000
 
 TEMPLATES = Path(__file__).resolve().parent / "templates"
@@ -350,6 +369,39 @@ IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif"}
 def fresh_id() -> str:
     """A unique section id — new sections must not collide with their source."""
     return "h.new_" + "".join(random.choices(string.ascii_lowercase + string.digits, k=12))
+
+
+def fill_ids(html: str) -> str:
+    """Give every SECTION_ID placeholder in a template an id of its own.
+
+    The templates carry the placeholder more than once (the <section> and the
+    block inside it), and one fresh id for all of them put duplicate ids in
+    the page.
+    """
+    return re.sub("SECTION_ID", lambda m: fresh_id(), html)
+
+
+def renew_ids(html: str) -> str:
+    """Replace every h.* id in a copied section, one new id per old one.
+
+    A heading's link target "h.X_l" keeps following its heading "h.X", so the
+    pair still belongs together in the copy.
+    """
+    old = sorted(set(re.findall(r'\bid="(h\.[^"]*)"', html)), key=len)
+    new: dict[str, str] = {}
+    for ident in old:
+        base = ident[:-2] if ident.endswith("_l") else None
+        new[ident] = new[base] + "_l" if base in new else fresh_id()
+    seen: set[str] = set()
+
+    def swap(m) -> str:
+        # A repeat of an id the source already duplicated gets one of its own.
+        ident = m.group(1)
+        out = new[ident] if ident not in seen else fresh_id()
+        seen.add(ident)
+        return f'id="{out}"'
+
+    return re.sub(r'\bid="(h\.[^"]*)"', swap, html)
 
 
 def _dir_size(path: Path) -> int:
@@ -364,7 +416,8 @@ def _prune_undo() -> None:
         shutil.rmtree(entries.pop(0), ignore_errors=True)
 
 
-def snapshot(label: str, page_file: str | None = None) -> str:
+def snapshot(label: str, page_file: str | None = None,
+             with_templates: bool = False) -> str:
     """
     Record the state an action is about to change.
 
@@ -391,6 +444,12 @@ def snapshot(label: str, page_file: str | None = None) -> str:
             shutil.copytree(folder, entry / "content" / Path(page_file).stem)
     elif CONTENT.exists():
         shutil.copytree(CONTENT, entry / "content")
+
+    # Element templates hold the default image. They live outside content/,
+    # so the action that changes them saves them too; without this, undoing it
+    # reported success and changed nothing.
+    if with_templates and TEMPLATES.exists():
+        shutil.copytree(TEMPLATES, entry / "templates")
 
     write(entry / "label.txt", label + "\n")
     write(entry / "scope.txt", scope + "\n")
@@ -433,6 +492,11 @@ def undo_last() -> dict:
             if ORDER_FILE.exists():
                 ORDER_FILE.unlink()
 
+    snap_templates = entry / "templates"
+    if snap_templates.exists():
+        shutil.rmtree(TEMPLATES, ignore_errors=True)
+        shutil.copytree(snap_templates, TEMPLATES)
+
     # Pages created after the snapshot (undoing "add page") aren't in the
     # snapshot to restore, so remove them explicitly or they linger as orphans.
     if scope == "site":
@@ -449,6 +513,8 @@ def undo_last() -> dict:
                 shutil.rmtree(folder, ignore_errors=True)
 
     shutil.rmtree(entry, ignore_errors=True)
+    # The search index is built from the pages, which just changed back.
+    sitekit.build_search_index(site_pages())
     return {"ok": True, "undid": label}
 
 
@@ -585,12 +651,10 @@ def api_page(page_file: str) -> dict:
 
 
 ACTION_LABELS = {
-    "set_text": "edit text",
     "set_block": "edit paragraph",
     "set_buttons": "edit buttons",
     "set_free": "move block",
     "set_default_image": "set default image",
-    "set_style": "restyle text",
     "set_image": "swap image",
     "drop_section": "delete section",
     "move_section": "move section",
@@ -598,14 +662,36 @@ ACTION_LABELS = {
     "add_page": "add page",
     "add_group": "add group",
     "move_page": "reorder",
-    "add_category": "add category",
     "rename_category": "rename",
     "move_child": "move sub-page",
     "remove_category": "remove category",
 }
 
 
+# One change at a time. The server answers requests on several threads, and two
+# saves landing together (a paragraph saving as you click into the next one,
+# say) each read the same file and wrote it back — the second write silently
+# dropped the first edit. Reads take it too, so they never see a half-written
+# file.
+LOCK = threading.RLock()
+
+
 def act(payload: dict) -> dict:
+    with LOCK:
+        result = _act(payload)
+        # Every answer says how deep undo now goes, so the Undo button can
+        # follow edits made in the preview — before, it stayed disabled until
+        # something happened to reload the sidebar.
+        if isinstance(result, dict):
+            result.setdefault("undoDepth", undo_depth())
+            # Removing a page never rebuilds one, so the search index has to
+            # be refreshed here too or it keeps offering the deleted page.
+            if result.get("ok") and payload.get("action") != "upload_image":
+                sitekit.build_search_index(site_pages())
+        return result
+
+
+def _act(payload: dict) -> dict:
     """Validate, snapshot, dispatch, and discard the snapshot if it failed."""
     action = payload.get("action")
 
@@ -623,17 +709,38 @@ def act(payload: dict) -> dict:
         return {"ok": False, "error": f"unknown action {action!r}"}
 
     page = payload.get("file")
-    page_scoped = action in ("set_text", "set_style", "set_image", "drop_section",
-                             "move_section", "add_section")
+    # Edits inside one page snapshot just that page. set_block — the save
+    # behind every paragraph edit — used to snapshot the whole site, so each
+    # one copied every page and all staged content.
+    page_scoped = action in ("set_block", "set_buttons", "set_free",
+                             "set_image", "drop_section", "move_section", "add_section")
     if page_scoped and (not page or page not in site_pages()):
         return {"ok": False, "error": "unknown page"}
+
+    # File names arrive from the browser and are joined onto real paths, so
+    # each must be one the page actually has — "../../tools/editor.py" must not
+    # resolve to a file outside content/.
+    if page_scoped and "section" in payload:
+        if payload["section"] not in manifest_of(page)["sections"]:
+            return {"ok": False, "error": "unknown section"}
+    if action == "add_section":
+        source = payload.get("source") or "blank"
+        if source != "blank" and source not in manifest_of(page)["sections"]:
+            return {"ok": False, "error": f"section {source} not found"}
+        tpl = payload.get("template")
+        if tpl and tpl not in {t["file"] for t in template_list()}:
+            return {"ok": False, "error": "unknown template"}
+    if action == "add_page" and payload.get("from_page") \
+            and payload["from_page"] not in site_pages():
+        return {"ok": False, "error": "unknown page to copy from"}
 
     label = ACTION_LABELS[action]
     extra = payload.get("label") or payload.get("slug") or ""
     if extra:
         label = f"{label} {extra}"
 
-    entry = snapshot(label, page if page_scoped else None)
+    entry = snapshot(label, page if page_scoped else None,
+                     with_templates=action == "set_default_image")
     try:
         result = _dispatch(payload, action, page, page_scoped)
     except Exception:
@@ -656,14 +763,17 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
         path = folder / payload["section"]
         html = textedit_mod.merge_spans(read(path))
         want = payload.get("block")
-        # Compare as strings: the id reaches us from the browser, where it has
-        # been through dataset and JSON, so it may be "17" rather than 17. An
-        # int/str comparison here silently fails to find the block, and the save
-        # is dropped.
-        target = next((s for s in textedit_mod.blocks(html) if str(s[2]) == str(want)), None)
-        if target is None:
+        # Ids are compared as strings inside run_range: the id reaches us from
+        # the browser, where it has been through dataset and JSON, so it may
+        # be "17" rather than 17.
+        #
+        # Only the block's text runs are rewritten, never its whole inside:
+        # a block can also hold widgets (a heading's copy-link button) that
+        # the editor never shows and must not delete.
+        found = textedit_mod.run_range(html, want)
+        if found is None:
             return {"ok": False, "error": f"block {want!r} not found"}
-        c_start, c_end, _bid, _tag, _open = target
+        c_start, c_end = found
 
         parts = payload.get("parts") or []
         if not parts:
@@ -722,81 +832,6 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
             return {"ok": False, "error": "no image templates to update"}
         return {"ok": True, "changed": changed, "src": src}
 
-    if action == "set_text":
-        folder = ensure_staged(page)
-        path = folder / payload["section"]
-        html = textedit_mod.merge_spans(read(path))
-        runs = list(textedit_mod.text_runs(html))
-        idx = payload["index"]
-        if idx < 0 or idx >= len(runs):
-            return {"ok": False, "error": f"run {idx} out of range"}
-        match = runs[idx][0]
-        # Newlines in the box become real breaks; a raw "\n" would collapse to
-        # a space and the line break would silently vanish.
-        write(path, html[:match.start(3)] + textedit_mod.to_html(payload["text"])
-              + html[match.end(3):])
-        return {"ok": True, "rebuilt": rebuild(page)}
-
-    # -------------------------------------------------------------- styling
-    if action == "set_style":
-        folder = ensure_staged(page)
-        path = folder / payload["section"]
-        html = read(path)
-        runs = list(textedit_mod.text_runs(html))
-        idx = payload["index"]
-        if idx < 0 or idx >= len(runs):
-            return {"ok": False, "error": f"run {idx} out of range"}
-
-        match, tag, attrs, text = runs[idx]
-        color = payload.get("color")
-        bold = payload.get("bold")
-        size = payload.get("size")
-        start, end = payload.get("start"), payload.get("end")
-
-        # Selection offsets are measured in the box's text, where a break is one
-        # newline; the markup holds it as a <br>. Compare and slice in the text
-        # form, then map back onto the markup so a slice never lands inside a tag.
-        plain = textedit_mod.to_text(text)
-
-        # Whole run only when the selection really covers all of it. A selection
-        # that merely STARTS at 0 is still partial (start <= 0 alone was wrong).
-        whole = (start is None or end is None or start >= end
-                 or (start <= 0 and end >= len(plain)))
-
-        if whole:
-            new_attrs = textedit_mod.set_style_props(attrs, color=color, bold=bold, size=size)
-            write(path, html[:match.start(2)] + new_attrs + html[match.end(2):])
-        else:
-            m_start, m_end = textedit_mod._markup_offsets(text, int(start or 0), int(end or 0))
-            head, mid, tail = text[:m_start], text[m_start:m_end], text[m_end:]
-            mid_attrs = textedit_mod.set_style_props(attrs, color=color, bold=bold, size=size)
-
-            if tag.lower() == "span":
-                # split into sibling spans, so only the slice is restyled
-                parts = []
-                for chunk, use in ((head, attrs), (mid, mid_attrs), (tail, attrs)):
-                    if chunk:
-                        parts.append(f"<{tag}{use}>{chunk}</{tag}>")
-                new_html = "".join(parts)
-            else:
-                # A block (p/h2/li) must stay ONE block — splitting it would
-                # create a second heading. Style the slice with an inner span.
-                bits = []
-                if color:
-                    bits.append(f"color: {color}")
-                if bold is not None:
-                    bits.append(f"font-weight: {'700' if bold else '400'}")
-                if size:
-                    bits.append(f"font-size: {size}")
-                inner_style = f' style="{"; ".join(bits)};"' if bits else ""
-                inner = f"<span>{head}</span>" if head else ""
-                inner += f"<span{inner_style}>{mid}</span>"
-                inner += f"<span>{tail}</span>" if tail else ""
-                new_html = f"<{tag}{attrs}>{inner}</{tag}>"
-
-            write(path, html[:match.start()] + new_html + html[match.end():])
-        return {"ok": True, "rebuilt": rebuild(page)}
-
     # ---------------------------------------------------------------- images
     if action == "set_image":
         folder = ensure_staged(page)
@@ -812,17 +847,19 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
         if not src:
             return {"ok": False, "error": "no image chosen"}
 
-        if re.search(r'src="[^"]*"', tag):
-            new_tag = re.sub(r'src="[^"]*"', f'src="{src}"', tag, count=1)
-        else:
-            new_tag = tag[:-1].rstrip() + f' src="{src}">'
+        # Escaped, and swapped in through a function: a quote in either value
+        # would end the attribute, and a backslash in a plain replacement
+        # string is read as a regex escape.
+        def put(tag_html: str, name: str, value: str) -> str:
+            attr = f'{name}="{htmllib.escape(value, quote=True)}"'
+            if re.search(rf'\b{name}="[^"]*"', tag_html):
+                return re.sub(rf'\b{name}="[^"]*"', lambda m: attr, tag_html, count=1)
+            return tag_html[:-1].rstrip() + f" {attr}>"
 
+        new_tag = put(tag, "src", src)
         alt = payload.get("alt")
         if alt is not None:
-            if re.search(r'alt="[^"]*"', new_tag):
-                new_tag = re.sub(r'alt="[^"]*"', f'alt="{alt}"', new_tag, count=1)
-            else:
-                new_tag = new_tag[:-1].rstrip() + f' alt="{alt}">'
+            new_tag = put(new_tag, "alt", str(alt))
 
         write(path, html[:found[idx].start()] + new_tag + html[found[idx].end():])
         return {"ok": True, "rebuilt": rebuild(page), "src": src}
@@ -865,7 +902,7 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
             if not tpl.exists():
                 return {"ok": False,
                         "error": "template missing — run: python tools/make_templates.py"}
-            html = read(tpl).replace("SECTION_ID", fresh_id())
+            html = fill_ids(read(tpl))
             base = "new-section"
         else:
             src = folder / source
@@ -874,7 +911,7 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
             html = read(src)
             # Fresh id: a copy that reused its source's id would put duplicate
             # ids in the page.
-            html = re.sub(r'\bid="h\.[^"]*"', f'id="{fresh_id()}"', html)
+            html = renew_ids(html)
             base = re.sub(r"^\d+-", "", source).removesuffix(".html")
 
         name = f"{len(order):02d}-{base}.html"
@@ -998,11 +1035,18 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
         donor = read(HERE / from_page)
         first = donor.index("<section")
         last = donor.rindex("</section>") + len("</section>")
-        blank = read(TEMPLATES / "heading-and-text.html").replace("SECTION_ID", fresh_id())
+        blank = fill_ids(read(TEMPLATES / "heading-and-text.html"))
         new_html = donor[:first] + blank + donor[last:]
         # mark the new page's OWN nav row (level 2 for a child, which
         # _set_current would miss), and clear the donor's highlight
         new_html = platforms_mod._mark_current_any(new_html, "/" + stem)
+        # The donor's <title> would otherwise come along too ("Changelog" on a
+        # brand-new Games page). The build refreshes it from the nav label; this
+        # covers a page that is not in the nav.
+        from html import escape
+        new_html = re.sub(r"<title>.*?</title>",
+                          lambda m: f"<title>{escape(label_text, quote=False)}</title>",
+                          new_html, count=1, flags=re.S)
         write(HERE / filename, new_html)
 
         order = load_order()
@@ -1010,7 +1054,7 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
             order.append(filename)
         save_order(order)
 
-        ensure_staged(filename)
+        ensure_staged(filename, force=True)
         rebuild(filename)
         return {"ok": True, "page": filename}
 
@@ -1058,15 +1102,6 @@ def _dispatch(payload: dict, action: str, page, page_scoped: bool) -> dict:
         return {"ok": True, "navFiles": sync_nav_order(order)}
 
     # ------------------------------------------------------------ categories
-    if action == "add_category":
-        import argparse
-        rc = platforms_mod.cmd_add(argparse.Namespace(
-            slug=payload["slug"],
-            label=payload.get("label") or payload["slug"],
-            after=payload.get("after", "/windows"),
-            from_page="apple-tv.html"))
-        return {"ok": rc == 0}
-
     if action == "remove_category":
         import argparse
         rc = platforms_mod.cmd_remove(argparse.Namespace(slug=payload["slug"]))
@@ -1079,11 +1114,36 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass  # keep the console clean
 
+    def _local_host(self) -> bool:
+        """Is this request addressed to the editor by its own name?
+
+        Any website you have open can send requests to 127.0.0.1. A page that
+        renames itself to point at this address (DNS rebinding) still carries
+        its own name in Host, so checking Host turns those away.
+        """
+        host = (self.headers.get("Host") or "").lower()
+        port = self.server.server_address[1]
+        return host in (f"127.0.0.1:{port}", f"localhost:{port}")
+
+    def _same_origin(self) -> bool:
+        """For changes: refuse anything sent from another site's page.
+
+        Browsers name the sending page in Origin. The editor's own requests
+        carry its own origin; a tool like curl sends none.
+        """
+        origin = self.headers.get("Origin")
+        if origin is None:
+            return True
+        port = self.server.server_address[1]
+        return origin.lower() in (f"http://127.0.0.1:{port}", f"http://localhost:{port}")
+
     def _send(self, code, body: bytes, ctype="application/json"):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        # The editor frames its own pages; no other site may frame it.
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
         self.end_headers()
         self.wfile.write(body)
 
@@ -1091,6 +1151,13 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(obj).encode("utf-8"))
 
     def do_GET(self):
+        if not self._local_host():
+            self._json({"error": "forbidden"}, 403)
+            return
+        with LOCK:
+            self._get()
+
+    def _get(self):
         from urllib.parse import urlparse, parse_qs
         parsed = urlparse(self.path)
         route = parsed.path
@@ -1180,6 +1247,13 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "not found"}, 404)
 
     def do_POST(self):
+        # JSON only. A plain form or text/plain post is what another site can
+        # send without the browser asking first; application/json from another
+        # origin needs a preflight this server never grants.
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if not self._local_host() or not self._same_origin() or ctype != "application/json":
+            self._json({"ok": False, "error": "forbidden"}, 403)
+            return
         length = int(self.headers.get("Content-Length") or 0)
         try:
             payload = json.loads(self.rfile.read(length) or b"{}")
@@ -1196,8 +1270,19 @@ class EditorServer(ThreadingHTTPServer):
     # ThreadingHTTPServer defaults allow_reuse_address to True, which on Windows
     # lets a SECOND server bind a port that is already in use — so a stale
     # instance keeps serving old code and your new one silently does nothing.
-    # Refuse that instead.
-    allow_reuse_address = False
+    # Windows gets an exclusive bind instead.
+    #
+    # Elsewhere SO_REUSEADDR means something safer — only the closed
+    # connections a stopped server leaves behind may share the port — and
+    # without it, restarting within a minute or so of stopping failed with
+    # "port already in use".
+    allow_reuse_address = sys.platform != "win32"
+
+    def server_bind(self):
+        import socket
+        if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
 
 def main() -> int:

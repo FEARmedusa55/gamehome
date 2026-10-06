@@ -114,6 +114,52 @@ def block_of(spans, pos: int) -> int | None:
     return best[1] if best else None
 
 
+def run_pos(match) -> int:
+    """Where a run's own text starts — the position to look its block up by.
+
+    NOT match.start(): that is the run's opening tag, and when the run is
+    itself a block (a bare <h1> or <p> holding plain text) the tag sits
+    OUTSIDE its own content, so the lookup found the container around it.
+    Saving the heading then rewrote that whole container and deleted the
+    paragraphs that shared it.
+    """
+    return match.start(3)
+
+
+def run_range(html: str, block_id) -> tuple[int, int] | None:
+    """The slice of a block that set_block may rewrite: its text runs only.
+
+    Rewriting the block's whole inside also deleted whatever else it held —
+    the "copy heading link" widget beside a heading's text, for one. This
+    spans from the first run to the last instead, widened to include an
+    inline <a> a run sits in (a link is rebuilt from its part's href).
+    Returns None when the block holds no runs.
+    """
+    spans = blocks(html)
+    target = next((b for b in spans if str(b[2]) == str(block_id)), None)
+    if target is None:
+        return None
+    c_start, c_end, bid = target[0], target[1], target[2]
+    mine = [r[0] for r in text_runs(html) if block_of(spans, run_pos(r[0])) == bid]
+    if not mine:
+        return None
+    links = [(c_start + m.start(), c_start + m.end())
+             for m in re.finditer(r"<a\b[^>]*>.*?</a>", html[c_start:c_end], re.S)]
+
+    def outer(m) -> tuple[int, int]:
+        # A run that IS the block (a bare <p>text</p>) is rewritten inside.
+        if m.start() < c_start:
+            return m.start(3), m.end(3)
+        a, b = m.start(), m.end()
+        for l_start, l_end in links:
+            if l_start <= a < l_end:
+                a, b = l_start, max(b, l_end)
+        return a, b
+
+    edges = [outer(m) for m in mine]
+    return min(e[0] for e in edges), max(e[1] for e in edges)
+
+
 def group_runs(html: str):
     """Group the text runs by the block they sit in.
 
@@ -127,7 +173,7 @@ def group_runs(html: str):
     groups: dict[int, list[int]] = {}
     order: list[int] = []
     for i, item in enumerate(runs):
-        bid = block_of(spans, item[0].start())
+        bid = block_of(spans, run_pos(item[0]))
         if bid is None:
             continue
         if bid not in groups:
@@ -135,6 +181,25 @@ def group_runs(html: str):
             order.append(bid)
         groups[bid].append(i)
     return [(bid, tags.get(bid, ""), groups[bid]) for bid in order]
+
+
+def _attr(value: str) -> str:
+    """Escape a value for a double-quoted attribute.
+
+    A font name the browser quotes (font-family: "Open Sans") ended the style
+    attribute early and broke the markup.
+    """
+    return (value.replace("&", "&amp;").replace('"', "&quot;")
+                 .replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def safe_href(href: str) -> str:
+    """A link target, or "" for one that would run code when clicked."""
+    href = (href or "").strip()
+    scheme = re.match(r"\s*([a-z][a-z0-9+.-]*):", re.sub(r"[\x00-\x20]", "", href), re.I)
+    if scheme and scheme.group(1).lower() in ("javascript", "vbscript", "data"):
+        return ""
+    return href
 
 
 def render_parts(parts, span_class: str = "C9DxTc") -> str:
@@ -147,55 +212,31 @@ def render_parts(parts, span_class: str = "C9DxTc") -> str:
     """
     out = []
     for part in parts:
-        text = to_html(str(part.get("text") or ""))
+        raw = str(part.get("text") or "")
+        if not raw:
+            # An empty part — a widget the browser handed back with no text —
+            # would otherwise leave an empty span behind on every save.
+            continue
+        text = to_html(raw)
         style = str(part.get("style") or "").strip()
         if style and not style.endswith(";"):
             style += ";"
         cls = str(part.get("class") or span_class)
-        if style:
-            inner = f'<span class="{cls}" style="{style}">{text}</span>'
-        else:
-            inner = text
-        href = str(part.get("href") or "").strip()
+        # Always a span, styled or not. Bare text beside a span is invisible to
+        # text_runs, so it vanished from the editor and the next save of the
+        # paragraph deleted it.
+        attrs = f' class="{_attr(cls)}"' + (f' style="{_attr(style)}"' if style else "")
+        inner = f"<span{attrs}>{text}</span>"
+        href = safe_href(str(part.get("href") or ""))
         if href:
             # Escape the URL for an attribute, and stop the new tab handing the
             # opener window over to the target page.
-            safe = (href.replace("&", "&amp;").replace('"', "&quot;")
-                        .replace("<", "&lt;").replace(">", "&gt;"))
+            safe = _attr(href)
             out.append(f'<a href="{safe}" target="_blank" rel="noopener noreferrer">{inner}</a>')
         else:
             out.append(inner)
     return "".join(out)
 
-
-def _markup_offsets(raw: str, start: int, end: int) -> tuple[int, int]:
-    """Map plain-text offsets onto the same positions inside `raw`.
-
-    The editor's selection is measured against the text it displays, which has
-    breaks as newlines; the markup has them as <br>. Splitting on the wrong
-    offsets would slice into the middle of a tag.
-    """
-    out = []
-    plain_at = 0
-    i = 0
-    starts = {start, end}
-    while i <= len(raw):
-        if plain_at in starts and len(out) < 2:
-            out.append(i)
-        if i >= len(raw):
-            break
-        m = re.compile(BR).match(raw, i)
-        if m:
-            if plain_at in starts and len(out) < 2:
-                out.append(i)
-            i = m.end()
-            plain_at += 1        # a break is one character in the text form
-            continue
-        i += 1
-        plain_at += 1
-    while len(out) < 2:
-        out.append(len(raw))
-    return out[0], out[1]
 
 # Properties whose given value is the CSS initial and therefore cannot change
 # how anything renders. Google Sites scatters these in and out of style strings,
@@ -298,67 +339,16 @@ def merge_spans(html: str) -> str:
     return "".join(out)
 
 
-def set_style_props(attrs: str, color: str | None = None,
-                    bold: bool | None = None, size: str | None = None) -> str:
-    """
-    Add, update or remove inline style properties on a tag's attribute string.
-
-    Colour here is genuinely local: the site's content classes (C9DxTc, puwcIf,
-    Qnc8Te) do not appear in any stylesheet, so the inline style is the only
-    thing setting the colour. Changing it cannot affect anything else.
-
-    color="" removes the colour so the run inherits the page's text colour.
-    """
-    match = re.search(r'style="([^"]*)"', attrs)
-    props: list[list[str]] = []
-    if match:
-        for decl in match.group(1).split(";"):
-            if ":" not in decl:
-                continue
-            name, value = decl.split(":", 1)
-            name, value = name.strip(), value.strip()
-            if name and not any(p[0].lower() == name.lower() for p in props):
-                props.append([name, value])
-
-    def put(name: str, value: str) -> None:
-        for prop in props:
-            if prop[0].lower() == name.lower():
-                prop[1] = value
-                return
-        props.append([name, value])
-
-    def drop(name: str) -> None:
-        props[:] = [p for p in props if p[0].lower() != name.lower()]
-
-    if color is not None:
-        if color:
-            put("color", color)
-        else:
-            drop("color")
-    if bold is not None:
-        put("font-weight", "700" if bold else "400")
-    # Size works exactly like colour: the site sets it per run as an inline
-    # font-size (body text is 13.999pt), so a size change is just another
-    # declaration in the same style string.
-    if size is not None:
-        if size:
-            put("font-size", size)
-        else:
-            drop("font-size")
-
-    style = "; ".join(f"{name}: {value}" for name, value in props)
-    if style:
-        style += ";"
-    if match:
-        return attrs[:match.start()] + f'style="{style}"' + attrs[match.end():]
-    return f'{attrs} style="{style}"' if style else attrs
-
-
 def text_runs(html: str):
-    """Yield (match, tag, attrs, text) for each leaf element holding text."""
+    """Yield (match, tag, attrs, text) for each leaf element holding text.
+
+    A run of only spaces counts. Google Sites often puts the space between two
+    words in a span of its own, and skipping it glued the words together on
+    the next save ("Can be found inArchive").
+    """
     for match in LEAF.finditer(html):
         text = match.group(3)
-        if text.strip():
+        if text:
             yield match, match.group(1), match.group(2), text
 
 
@@ -424,8 +414,9 @@ def cmd_set(args) -> int:
         print("\n(dry run — nothing written)")
         return 0
 
-    # Replace only the text between the tags; element, attrs and styling untouched.
-    new_html = (merged[:match.start(3)] + args.text + merged[match.end(3):])
+    # Replace only the text between the tags; element, attrs and styling
+    # untouched. Escaped, so "&" or "<" typed on the command line stays text.
+    new_html = (merged[:match.start(3)] + to_html(args.text) + merged[match.end(3):])
 
     # Keep the span merge, since it is what made the run contiguous.
     write(path, new_html)

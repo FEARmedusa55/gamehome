@@ -123,21 +123,27 @@ INJECT = """
   // Idempotent: tagging an element that is already tagged changes nothing, so
   // the editor can call this freely whenever it sees markers go missing.
   function retag() {
-    // Walk the real DOM and tag whatever matches a target by text. Deepest
-    // first: a wrapper div and the paragraph inside it carry the same text, and
-    // the paragraph is the one worth editing.
-    var candidates = [];
+    // Walk the real DOM and tag whatever matches a target by text, in
+    // document order — the order the targets are listed in — so that two
+    // blocks with the same words ("Homebrew", twice) each get their own
+    // marker rather than swapping places.
+    var all = [];
+    var byText = {};
     document.querySelectorAll(TAGS).forEach(function (el) {
       // Text inside a filled button is a widget, not a paragraph; rewriting it
       // would flatten the button.
       if (el.closest('.QmpIrf, .U26fgb, a.FKF6mc')) return;
       var txt = norm(el.textContent);
       if (!txt) return;
-      var depth = 0, p = el;
-      while ((p = p.parentElement)) depth++;
-      candidates.push({ el: el, txt: txt, depth: depth });
+      var c = { el: el, txt: txt };
+      all.push(c);
+      (byText[txt] = byText[txt] || []).push(c);
     });
-    candidates.sort(function (a, b) { return b.depth - a.depth; });
+    // A wrapper div and the paragraph inside it carry the same text; the
+    // paragraph is the one worth editing, so the wrapper is dropped.
+    var candidates = all.filter(function (c) {
+      return !byText[c.txt].some(function (d) { return d !== c && c.el.contains(d.el); });
+    });
 
     var used = {};
     var matched = 0;
@@ -156,20 +162,22 @@ INJECT = """
       function (a, b) { return norm(a) === norm(b); },
       function (a, b) { return squash(a) === squash(b); }
     ];
+    var taken = [];
     for (var pi = 0; pi < passes.length; pi++) {
-      candidates.forEach(function (c) {
-        for (var i = 0; i < TARGETS.length; i++) {
-          var t = TARGETS[i];
-          if (used[t.t]) continue;
-          if (passes[pi](t.text, c.txt)) {
-            used[t.t] = 1;
-            matched++;
-            c.el.setAttribute('data-mmb', t.t);
-            c.el.setAttribute('contenteditable', 'true');
-            return;
-          }
+      for (var i = 0; i < TARGETS.length; i++) {
+        var t = TARGETS[i];
+        if (used[t.t]) continue;
+        for (var ci = 0; ci < candidates.length; ci++) {
+          var c = candidates[ci];
+          if (taken[ci] || !passes[pi](t.text, c.txt)) continue;
+          taken[ci] = true;
+          used[t.t] = 1;
+          matched++;
+          c.el.setAttribute('data-mmb', t.t);
+          c.el.setAttribute('contenteditable', 'true');
+          break;
         }
-      });
+      }
     }
 
     // Buttons are widgets, not paragraphs, so they get their own marker rather
@@ -230,14 +238,23 @@ INJECT = """
 
   function tag(el) { return el && el.getAttribute ? el.getAttribute('data-mmb') : null; }
 
-  // Same notion of position as the editor's nodeText: walk text nodes and count.
+  // Same notion of position as the editor's nodeText: text counts its
+  // characters and a <br> counts as one. Counting text nodes alone put every
+  // selection after a line break one letter early per break.
+  function textLen(node) {
+    var n = 0;
+    node.childNodes.forEach(function (c) {
+      if (c.nodeType === 3) n += c.nodeValue.length;
+      else if (c.nodeName === 'BR') n += 1;
+      else n += textLen(c);
+    });
+    return n;
+  }
   function offsetOf(root, node, off) {
-    var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), at = 0, n;
-    while ((n = w.nextNode())) {
-      if (n === node) return at + off;
-      at += n.nodeValue.length;
-    }
-    return at;
+    var r = document.createRange();
+    r.selectNodeContents(root);
+    try { r.setEnd(node, off); } catch (e) { return textLen(root); }
+    return textLen(r.cloneContents());
   }
 
   // The block's own markup, with our attributes stripped, so the editor reads
@@ -492,9 +509,18 @@ INJECT = """
 """
 
 
+def _payload(targets_list: list[dict]) -> str:
+    """The target list as JSON that is safe inside a <script>.
+
+    A paragraph containing "</script>" would otherwise end the script early
+    and leave the preview uneditable.
+    """
+    return json.dumps(targets_list, separators=(",", ":")).replace("</", "<\\/")
+
+
 def inject(page_html: str, targets_list: list[dict]) -> str:
     """Append the marker script, carrying the target list as JSON."""
-    payload = json.dumps(targets_list, separators=(",", ":"))
+    payload = _payload(targets_list)
     block = INJECT.replace("__TARGETS__", payload)
     if "</body>" in page_html:
         return page_html.replace("</body>", block + "</body>", 1)
@@ -513,7 +539,7 @@ def parts(targets_list: list[dict]) -> dict:
     The editor frame's own JavaScript does run, so it can put these in the frame
     after the page settles, and put them back if the page replaces itself again.
     """
-    payload = json.dumps(targets_list, separators=(",", ":"))
+    payload = _payload(targets_list)
     cut = INJECT.find("<script")
     style, script = INJECT[:cut], INJECT[cut:]
     # Strip the wrapper tags: the editor sets these as textContent on elements it

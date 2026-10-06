@@ -35,6 +35,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sections import iter_sections, section_id, strip_tags  # noqa: E402
 from textedit import merge_spans                             # noqa: E402
+import sitekit                                               # noqa: E402
 
 HERE = Path(__file__).resolve().parent.parent
 CONTENT = HERE / "content"
@@ -182,7 +183,9 @@ def build_one(page: Path, quiet: bool = False) -> str | None:
             continue
         parts.append(read(path))
     parts.append(read(folder / manifest["tail"]))
-    return "".join(parts)
+    # The phone menu, search and link-preview tags are added here, on every
+    # build, so no page can be published without them.
+    return sitekit.finalize("".join(parts), page.name)
 
 
 def cmd_drop(args) -> int:
@@ -241,6 +244,8 @@ def cmd_build(args) -> int:
         built += 1
     if not built:
         print("Nothing to build.")
+    elif not args.dry_run:
+        print(f"  search index: {sitekit.build_search_index()} sections")
     return 0
 
 
