@@ -357,7 +357,7 @@ def rebuild(page_file: str) -> int:
 # ---------------------------------------------------------------------------
 
 UNDO = HERE / "_undo"
-UNDO_LIMIT = 8            # snapshots kept
+UNDO_LIMIT = 30           # snapshots kept
 UNDO_MAX_BYTES = 400_000_000
 
 TEMPLATES = Path(__file__).resolve().parent / "templates"
@@ -416,7 +416,8 @@ def _prune_undo() -> None:
         shutil.rmtree(entries.pop(0), ignore_errors=True)
 
 
-def snapshot(label: str, page_file: str | None = None) -> str:
+def snapshot(label: str, page_file: str | None = None,
+             with_templates: bool = False) -> str:
     """
     Record the state an action is about to change.
 
@@ -443,6 +444,12 @@ def snapshot(label: str, page_file: str | None = None) -> str:
             shutil.copytree(folder, entry / "content" / Path(page_file).stem)
     elif CONTENT.exists():
         shutil.copytree(CONTENT, entry / "content")
+
+    # Element templates hold the default image. They live outside content/,
+    # so the action that changes them saves them too; without this, undoing it
+    # reported success and changed nothing.
+    if with_templates and TEMPLATES.exists():
+        shutil.copytree(TEMPLATES, entry / "templates")
 
     write(entry / "label.txt", label + "\n")
     write(entry / "scope.txt", scope + "\n")
@@ -485,6 +492,11 @@ def undo_last() -> dict:
             if ORDER_FILE.exists():
                 ORDER_FILE.unlink()
 
+    snap_templates = entry / "templates"
+    if snap_templates.exists():
+        shutil.rmtree(TEMPLATES, ignore_errors=True)
+        shutil.copytree(snap_templates, TEMPLATES)
+
     # Pages created after the snapshot (undoing "add page") aren't in the
     # snapshot to restore, so remove them explicitly or they linger as orphans.
     if scope == "site":
@@ -501,6 +513,8 @@ def undo_last() -> dict:
                 shutil.rmtree(folder, ignore_errors=True)
 
     shutil.rmtree(entry, ignore_errors=True)
+    # The search index is built from the pages, which just changed back.
+    sitekit.build_search_index(site_pages())
     return {"ok": True, "undid": label}
 
 
@@ -657,7 +671,20 @@ ACTION_LABELS = {
 }
 
 
+# One change at a time. The server answers requests on several threads, and two
+# saves landing together (a paragraph saving as you click into the next one,
+# say) each read the same file and wrote it back — the second write silently
+# dropped the first edit. Reads take it too, so they never see a half-written
+# file.
+LOCK = threading.RLock()
+
+
 def act(payload: dict) -> dict:
+    with LOCK:
+        return _act(payload)
+
+
+def _act(payload: dict) -> dict:
     """Validate, snapshot, dispatch, and discard the snapshot if it failed."""
     action = payload.get("action")
 
@@ -675,7 +702,11 @@ def act(payload: dict) -> dict:
         return {"ok": False, "error": f"unknown action {action!r}"}
 
     page = payload.get("file")
-    page_scoped = action in ("set_text", "set_style", "set_image", "drop_section",
+    # Edits inside one page snapshot just that page. set_block — the save
+    # behind every paragraph edit — used to snapshot the whole site, so each
+    # one copied every page and all staged content.
+    page_scoped = action in ("set_block", "set_buttons", "set_free",
+                             "set_text", "set_style", "set_image", "drop_section",
                              "move_section", "add_section")
     if page_scoped and (not page or page not in site_pages()):
         return {"ok": False, "error": "unknown page"}
@@ -685,7 +716,8 @@ def act(payload: dict) -> dict:
     if extra:
         label = f"{label} {extra}"
 
-    entry = snapshot(label, page if page_scoped else None)
+    entry = snapshot(label, page if page_scoped else None,
+                     with_templates=action == "set_default_image")
     try:
         result = _dispatch(payload, action, page, page_scoped)
     except Exception:
@@ -1155,6 +1187,10 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(obj).encode("utf-8"))
 
     def do_GET(self):
+        with LOCK:
+            self._get()
+
+    def _get(self):
         from urllib.parse import urlparse, parse_qs
         parsed = urlparse(self.path)
         route = parsed.path
