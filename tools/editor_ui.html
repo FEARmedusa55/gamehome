@@ -35,6 +35,24 @@
   button:hover{background:var(--panel-2)}
   button.primary{background:var(--accent);border-color:var(--accent);color:#08111f}
   button.primary:hover{filter:brightness(1.12)}
+
+  /* --- publish panel --- */
+  .pubpanel{position:fixed;top:56px;right:16px;width:380px;max-width:calc(100vw - 32px);
+    background:var(--panel);border:1px solid var(--border-2);border-radius:10px;
+    box-shadow:0 12px 32px rgba(0,0,0,.45);z-index:50;padding:14px 16px;font-size:13.5px;line-height:1.5}
+  .pubpanel[hidden]{display:none}
+  .pubhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+  .pubpanel p{margin:0 0 10px}
+  .pubpanel .muted{color:var(--muted)}
+  .pubpanel .warnbox{background:rgba(217,163,67,.12);border:1px solid rgba(217,163,67,.4);
+    border-radius:6px;padding:8px 10px;margin:0 0 10px}
+  .pubpanel ul{margin:0 0 10px;padding-left:18px}
+  .pubpanel input{width:100%;box-sizing:border-box;margin:0 0 10px}
+  .pubpanel .row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+  .pubpanel .result{border-radius:6px;padding:8px 10px;margin-top:6px}
+  .pubpanel .result.good{background:rgba(67,181,129,.14);border:1px solid rgba(67,181,129,.45)}
+  .pubpanel .result.bad{background:rgba(226,104,90,.14);border:1px solid rgba(226,104,90,.5)}
+  .pubpanel a{color:var(--accent)}
   button.tiny{padding:2px 7px;font-size:12px;line-height:1.4}
   button.danger:hover{color:var(--danger);border-color:var(--danger)}
   button:disabled{opacity:.45;cursor:default}
@@ -277,8 +295,15 @@
   <div class="spacer"></div>
   <button id="undo">Undo</button>
   <button id="fullscreen">Full screen</button>
-  <button id="openSite" class="primary">Open site</button>
+  <button id="openSite">Open site</button>
+  <button id="publish" class="primary" title="Upload your changes to GitHub">Publish</button>
 </header>
+
+<!-- Publish: the git steps, done for you. See tools/publish.py. -->
+<div class="pubpanel" id="pubPanel" hidden>
+  <div class="pubhead"><b>Publish to GitHub</b><button class="tiny" id="pubClose" title="Close">&#10005;</button></div>
+  <div id="pubBody"></div>
+</div>
 
 <!-- The styling bar: one for the whole editor, like a word processor's, acting
      on whichever paragraph you are in and the words you have selected there. -->
@@ -340,6 +365,10 @@ async function post(payload) {
   });
   const j = await r.json();
   if (typeof j.undoDepth === 'number') setUndo(j.undoDepth);
+  if (j.ok && !String(payload.action || '').startsWith('git_') && payload.action !== 'publish') {
+    clearTimeout(post._pub);
+    post._pub = setTimeout(() => { if (typeof pubRefresh === 'function') pubRefresh(); }, 800);
+  }
   if (!j.ok) throw new Error(j.error || 'action failed');
   return j;
 }
@@ -378,7 +407,7 @@ let previewKeep = null;
 // serving an old copy of this page — the failure that has bitten repeatedly
 // here, because a stale tab asks for the preview without the edit flag and
 // nothing about it looks wrong.
-const BUILD = '2026-10-06m';
+const BUILD = '2026-10-06o';
 (function stamp() {
   const mount = () => {
     const b = document.getElementById('build');
@@ -1855,7 +1884,104 @@ document.addEventListener('fullscreenchange', () => {
   }
 });
 
+// --- publish ---------------------------------------------------------------
+// One button for "save my changes to GitHub". The server runs the git steps
+// (tools/publish.py); this panel says what will happen and what did.
+let PUB = null;
+let pubBusy = false;
+let pubResult = null;
+const pubBtn = document.getElementById('publish');
+const pubPanel = document.getElementById('pubPanel');
+
+function escText(s) { return escHtml(String(s == null ? '' : s)); }
+
+async function pubRefresh() {
+  try { PUB = await post({ action: 'git_status' }); }
+  catch (e) { PUB = { ready: false, problem: e.message }; }
+  const n = PUB && PUB.ready ? (PUB.pages.length || PUB.changed) : 0;
+  pubBtn.textContent = n ? `Publish (${n})` : (PUB && PUB.ready && PUB.ahead ? 'Publish (1)' : 'Publish');
+  pubBtn.title = n ? `Unpublished changes on ${n} page${n === 1 ? '' : 's'}` : 'Upload your changes to GitHub';
+  if (!pubPanel.hidden) pubRender();
+}
+
+function pubRender() {
+  const body = document.getElementById('pubBody');
+  const P = PUB || {};
+  let html = '';
+  if (!PUB) {
+    html = '<p class="muted">Checking\u2026</p>';
+  } else if (!P.ready) {
+    html = `<p>${escText(P.problem)}</p>`;
+  } else {
+    if (P.live) {
+      html += `<p class="muted">Publishing updates the live site (branch <b>${escText(P.branch)}</b>).</p>`;
+    } else {
+      html += `<div class="warnbox">You are on the test branch <b>${escText(P.branch)}</b>. Publishing
+        uploads to that branch; it goes live once it is merged into main on GitHub.
+        <div class="row" style="margin:8px 0 0"><button class="tiny" id="pubMain" ${P.changed ? 'disabled title="Publish your changes first"' : ''}>Switch to main</button></div></div>`;
+    }
+    if (P.changed) {
+      html += '<p>Unpublished changes:</p><ul>' +
+        (P.pages.length ? P.pages.map(f => ((STATE.pages || []).find(x => x.file === f) || {}).title || f)
+                        : [`${P.changed} file${P.changed === 1 ? '' : 's'}`])
+          .map(x => `<li>${escText(x)}</li>`).join('') + '</ul>';
+      html += '<input type="text" id="pubNote" placeholder="What did you change? (optional)">';
+    } else if (P.ahead) {
+      html += '<p>Saved changes are waiting to be uploaded.</p>';
+    } else {
+      html += '<p class="muted">No unpublished changes.</p>';
+    }
+    html += `<div class="row">
+      <button class="primary" id="pubGo" ${pubBusy ? 'disabled' : ''}>${pubBusy === 'publish' ? 'Publishing\u2026' : 'Publish to site'}</button>
+      <button id="pubPull" ${pubBusy ? 'disabled' : ''}>${pubBusy === 'pull' ? 'Getting latest\u2026' : 'Get latest from GitHub'}</button>
+    </div>`;
+    if (P.repo) html += `<p class="muted" style="margin:6px 0 0"><a href="${escText(P.repo)}" target="_blank" rel="noopener">Open the repository on GitHub</a></p>`;
+  }
+  if (pubResult) html += `<div class="result ${pubResult.ok ? 'good' : 'bad'}">${escText(pubResult.text)}</div>`;
+  body.innerHTML = html;
+  const go = document.getElementById('pubGo');
+  if (go) go.onclick = () => pubRun('publish');
+  const pull = document.getElementById('pubPull');
+  if (pull) pull.onclick = () => pubRun('pull');
+  const toMain = document.getElementById('pubMain');
+  if (toMain) toMain.onclick = () => pubRun('main');
+}
+
+async function pubRun(kind) {
+  if (pubBusy) return;
+  const note = (document.getElementById('pubNote') || {}).value || '';
+  pubBusy = kind;
+  pubResult = null;
+  pubRender();
+  try {
+    // A list changed in the preview is saved before anything is uploaded.
+    await flushLists();
+    const action = kind === 'publish' ? 'publish' : kind === 'pull' ? 'git_update' : 'git_main';
+    const r = await post({ action, note });
+    pubResult = { ok: true, text: r.message + (r.undoCleared ? ' (Undo history was cleared, since the files changed.)' : '') };
+    if (r.pulled || r.reload) {
+      await loadState();
+      if (CURRENT && STATE.pages.some(p => p.file === CURRENT)) await selectPage(CURRENT);
+      else { CURRENT = null; reloadPreview(); }
+    }
+  } catch (e) {
+    pubResult = { ok: false, text: e.message };
+  }
+  pubBusy = false;
+  await pubRefresh();
+  pubRender();
+}
+
+pubBtn.onclick = () => {
+  pubPanel.hidden = !pubPanel.hidden;
+  if (!pubPanel.hidden) { pubResult = null; pubRender(); pubRefresh(); }
+};
+document.getElementById('pubClose').onclick = () => { pubPanel.hidden = true; };
+// Keep the count on the button roughly current.
+setInterval(() => { if (!pubBusy) pubRefresh(); }, 30000);
+
 loadState().catch(e => toast(e.message, true));
+pubRefresh();
 </script>
 </body>
 </html>

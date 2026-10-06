@@ -6,11 +6,10 @@ and markup; the content is edited with a small local editor.
 
 ## Edit the site
 
-```bash
-python tools/editor.py          # opens http://127.0.0.1:8765/ in your browser
-```
+**Double-click `Edit site.bat`** (Windows) — or run `python tools/editor.py` —
+and the editor opens in your browser. Keep its window open while you edit.
 
-Python 3.10+, standard library only — nothing to install.
+Python 3.10+, standard library only — nothing else to install.
 
 - **Left** — the site's pages and nav groups. `+` adds a page under a group,
   `✎` renames, `↑ ↓` reorders (the nav on every page follows), `−` removes.
@@ -27,7 +26,19 @@ Python 3.10+, standard library only — nothing to install.
   outside it.
 - **Undo** — reverts the last change. 30 steps are kept.
 
-When you are happy, commit and push — GitHub Pages publishes what is on `main`.
+**Publish** (top right) uploads your changes to GitHub — no command line.
+The button shows how many pages have unpublished changes. In its panel:
+
+- **Publish to site** saves everything and uploads it; on `main` the live
+  site updates a minute or two later. Anything changed on GitHub meanwhile
+  (a merged pull request) is combined in first.
+- **Get latest from GitHub** brings in changes made there; your unpublished
+  edits are kept.
+- On a test branch it says so, and **Switch to main** moves you to the
+  branch the live site is built from.
+
+It uses the Git and GitHub sign-in already on your computer (installing
+GitHub Desktop and signing in once sets both up).
 
 > **Free positioning (Alt-drag)** pins a block at a fixed pixel spot. It can
 > overlap other text on phones, so check the page at phone width afterwards.
