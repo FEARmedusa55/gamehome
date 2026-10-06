@@ -1540,6 +1540,22 @@ async function savePostedBlock(hit, html) {
 window.addEventListener('message', ev => {
 const d = ev.data || {};
 if (!d.mm) return;
+// The page reports what it managed to make editable. Surfacing it means the
+// edit mode is never a mystery: either it says how many blocks are editable,
+// or it says none are, and you know which side to look at.
+if (d.mm === 'ready') {
+  const n = Number(d.matched) || 0;
+  const expected = Number(d.expected) || 0;
+  if (expected && !n) {
+    status('NOT EDITABLE \u2014 this page came back without edit markers');
+    toast('The preview loaded without edit markers', true);
+  } else if (!expected) {
+    status('nothing editable on this page');
+  } else {
+    status(`${n} of ${expected} blocks editable \u00b7 click a paragraph to edit`);
+  }
+  return;
+}
 if (d.mm === 'button') { showButtonFields(d.target); return; }
 if (d.mm === 'image') { showImageSwap(d.target); return; }
 // A link clicked in the preview opens in a tab instead of navigating the
