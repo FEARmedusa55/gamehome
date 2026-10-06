@@ -174,6 +174,19 @@
             margin-bottom:8px}
   .defhint{margin:8px 0 0;font-size:11px;color:var(--muted);line-height:1.45}
 
+  /* A stale tab is the failure that has bitten repeatedly: the browser keeps an
+     old copy of this page, its preview is requested without the edit flag, and
+     nothing looks wrong. The stamp makes that visible. */
+  .build{font-family:var(--mono);font-size:10px;color:var(--muted);
+         font-weight:400;margin-left:6px;letter-spacing:.04em}
+
+  /* Loud, because a preview that silently is not editable is the whole problem */
+  .warnbar{
+    background:#5a1f1a;border-bottom:1px solid #8c3a30;color:#ffd9d3;
+    font-size:12.5px;padding:8px 14px;line-height:1.5;
+  }
+  .warnbar b{color:#fff}
+
   /* the editor's own top bar: the styling controls live here, not per section */
   .topbar{
     position:sticky;top:0;z-index:30;
@@ -264,7 +277,7 @@
 <body>
 
 <header class="sitebar">
-  <div class="brand"><span>&#9632;</span> Site editor</div>
+  <div class="brand"><span>&#9632;</span> Site editor <b id="build" class="build"></b></div>
   <div class="status" id="status"></div>
   <div class="spacer"></div>
   <button id="undo">Undo</button>
@@ -276,6 +289,10 @@
 <!-- The styling bar: one for the whole editor, like a word processor's, acting
      on whichever paragraph you are in and the words you have selected there. -->
 <div class="topbar" id="topbar"></div>
+
+<!-- Shown only when the preview is not editable. The failure is otherwise
+     invisible: the page looks normal and simply does not respond. -->
+<div class="warnbar" id="warnbar" hidden></div>
 
 <div class="layout" id="layout">
   <aside>
@@ -353,6 +370,28 @@ const PREVIEW_EDIT = true;
 
 let previewWait = null;
 
+// Shown in the header. If this does not change when you reload, your browser is
+// serving an old copy of this page — the failure that has bitten repeatedly
+// here, because a stale tab asks for the preview without the edit flag and
+// nothing about it looks wrong.
+const BUILD = '2026-10-05a';
+(function stamp() {
+  const mount = () => {
+    const b = document.getElementById('build');
+    if (b) b.textContent = BUILD;
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
+  else mount();
+})();
+
+// A preview that is not editable looks exactly like one that is. Say so loudly.
+function warn(html) {
+  const w = document.getElementById('warnbar');
+  if (!w) return;
+  w.hidden = !html;
+  w.innerHTML = html || '';
+}
+
 function reloadPreview() {
   const f = document.getElementById('preview');
   f.src = 'about:blank';
@@ -363,7 +402,11 @@ function reloadPreview() {
     let query = '';
     try { query = f.contentWindow.location.search || ''; } catch (e) { query = '(unreadable)'; }
     if (!query.includes('mm_edit')) {
-      status('NOT EDITABLE \u2014 the preview loaded without the edit flag');
+      warn('The preview was requested <b>without the edit flag</b>. That means this browser '
+           + 'tab is running an old copy of the editor — reload with <b>Ctrl+Shift+R</b>.');
+    } else {
+      warn('The preview was requested in edit mode but <b>the page never reported in</b>. '
+           + 'Something in this browser is blocking the script.');
     }
   }, 7000);
   setTimeout(() => {
@@ -1564,11 +1607,15 @@ if (d.mm === 'ready') {
   catch (e) { query = '(unreadable)'; }
   const flag = query.includes('mm_edit') ? 'edit mode' : 'NO EDIT FLAG';
   if (expected && !n) {
-    status(`NOT EDITABLE \u2014 page came back without markers (${flag})`);
-    toast('The preview loaded without edit markers', true);
+    warn('<b>The page came back without edit markers.</b> The preview requested '
+         + (flag === 'edit mode' ? 'edit mode' : 'no flag (stale tab — reload with Ctrl+Shift+R)')
+         + ', and marked none of its ' + expected + ' blocks.');
+    status(`NOT EDITABLE \u2014 no markers (${flag})`);
   } else if (!expected) {
+    warn('');
     status('nothing editable on this page');
   } else {
+    warn('');
     status(`${n} of ${expected} blocks editable (${flag}) \u00b7 click a paragraph`);
   }
   return;
